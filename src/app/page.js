@@ -6,6 +6,7 @@ import { getJob } from "@/config/jobs";
 import { supabase } from "@/lib/supabaseClient";
 import { formatNumber } from "@/lib/format";
 import ProgressBar from "@/components/ProgressBar";
+import WelcomeBackModal from "@/components/WelcomeBackModal";
 import {
   jobBattleStats,
   placeholderMonster,
@@ -55,13 +56,19 @@ async function saveProgress(character, battle) {
     .from("characters")
     .update({
       level: battle.level,
-      progress: { exp: battle.exp, gold: battle.gold, killCount: battle.killCount },
+      progress: {
+        exp: battle.exp,
+        gold: battle.gold,
+        killCount: battle.killCount,
+        // 다음에 접속했을 때 이 시각을 기준으로 방치 보상을 계산한다.
+        lastActiveAt: new Date().toISOString(),
+      },
     })
     .eq("user_id", character.user_id);
 }
 
 export default function AdventurePage() {
-  const { character, refreshCharacter } = useAuth();
+  const { character, refreshCharacter, welcomeSummary, clearWelcomeSummary } = useAuth();
   const job = character ? getJob(character.job) : null;
 
   const [battle, setBattle] = useState(initialBattleState);
@@ -76,6 +83,7 @@ export default function AdventurePage() {
   const hitCounterRef = useRef(0);
 
   // 캐릭터 정보가 도착하면, 저장되어 있던 값으로 전투 상태를 한 번만 채운다.
+  // (방치 보상 계산은 로그인 시점에 AuthContext에서 이미 끝난 상태로 넘어온다)
   useEffect(() => {
     if (character && !loadedRef.current) {
       loadedRef.current = true;
@@ -159,6 +167,8 @@ export default function AdventurePage() {
 
   return (
     <div className="flex flex-col gap-6 px-6 py-8">
+      <WelcomeBackModal summary={welcomeSummary} onClose={clearWelcomeSummary} />
+
       <div className="flex items-center gap-3">
         <span className="text-3xl">{job.emoji}</span>
         <div className="flex-1">
@@ -240,7 +250,7 @@ export default function AdventurePage() {
       </div>
 
       <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        방치 보상, 돌발 이벤트는 다음 단계에서 추가될 예정입니다.
+        모험 일지, 돌발 이벤트는 다음 단계에서 추가될 예정입니다.
       </p>
     </div>
   );

@@ -24,6 +24,11 @@ export const monsterBaseExp = 8;
 // 1단계에서는 몬스터 종류를 하나만 쓴다. 실제 지역별 몬스터는 6번(지역) 단계에서 추가.
 export const placeholderMonster = { name: "슬라임", emoji: "🟢" };
 
+// 방치 보상: 최대 몇 시간까지 자리를 비운 것으로 인정할지
+export const maxIdleHours = 12;
+// 이 시간(초)보다 짧게 자리를 비웠으면 "다녀오셨군요!" 창을 띄우지 않는다 (새로고침 등 방지)
+export const minAwaySecondsForSummary = 60;
+
 export function getAttackForLevel(jobId, level) {
   const base = jobBattleStats[jobId] ?? jobBattleStats.warrior;
   return base.attack + attackGrowthPerLevel * (level - 1);
