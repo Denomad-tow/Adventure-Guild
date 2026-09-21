@@ -24,3 +24,108 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes dmg-float {
+  0% {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -40px);
+    opacity: 0;
+  }
+}
+
+.dmg-number {
+  position: absolute;
+  left: 50%;
+  animation: dmg-float 0.9s ease-out forwards;
+  font-weight: 700;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+@keyframes screen-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-6px);
+  }
+  75% {
+    transform: translateX(6px);
+  }
+}
+
+.screen-shake {
+  animation: screen-shake 0.3s ease-in-out;
+}
+
+@keyframes level-up-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  20% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+  80% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+.level-up-pop {
+  animation: level-up-pop 1.5s ease-in-out forwards;
+}
+
+@keyframes cloud-drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(16px);
+  }
+}
+
+.cloud-drift {
+  animation: cloud-drift 6s ease-in-out infinite alternate;
+}
+
+@keyframes attack-lunge {
+  0% {
+    transform: translateX(0);
+  }
+  40% {
+    transform: translateX(14px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+.attack-lunge {
+  animation: attack-lunge 0.25s ease-out;
+}
+
+@keyframes monster-hurt {
+  0% {
+    transform: scale(1) translateX(0);
+  }
+  30% {
+    transform: scale(0.92) translateX(-6px);
+  }
+  100% {
+    transform: scale(1) translateX(0);
+  }
+}
+
+.monster-hurt {
+  animation: monster-hurt 0.25s ease-out;
+}
