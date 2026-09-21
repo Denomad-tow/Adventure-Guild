@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { simulateIdleProgress } from "@/lib/idleSimulation";
 import { formatDuration } from "@/lib/format";
 import { maxIdleHours, minAwaySecondsForSummary } from "@/config/balance";
+import { regions } from "@/config/regions";
 
 const AuthContext = createContext(null);
 
@@ -45,18 +46,26 @@ export function AuthProvider({ children }) {
 
       if (awaySeconds >= minAwaySecondsForSummary) {
         const enhanceLevel = progress.enhanceLevel ?? 0;
+        const regionIndex = progress.regionIndex ?? 0;
+        const regionStage = progress.regionStage ?? regions.map(() => 1);
+        const unlockedRegionIndex = progress.unlockedRegionIndex ?? 0;
         const baseState = {
           level: data.level ?? 1,
           exp: progress.exp ?? 0,
           gold: progress.gold ?? 0,
-          killCount: progress.killCount ?? 0,
+          regionIndex,
+          stage: regionStage[regionIndex] ?? 1,
+          killIndexInStage: 0, // 스테이지 안에서 몇 마리 잡았는지는 방치 중엔 기억하지 않는다 (사소한 단순화)
+          regionStage: [...regionStage],
         };
         const result = simulateIdleProgress(baseState, awaySeconds, data.job, enhanceLevel);
         const updatedProgress = {
           exp: result.exp,
           gold: result.gold,
-          killCount: result.killCount,
           enhanceLevel,
+          regionIndex: result.regionIndex,
+          regionStage: result.regionStage,
+          unlockedRegionIndex,
           lastActiveAt: new Date().toISOString(),
         };
 

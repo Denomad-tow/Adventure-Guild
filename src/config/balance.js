@@ -15,14 +15,18 @@ export const attackGrowthPerLevel = 3;
 export const expBase = 20;
 export const expPerLevel = 15;
 
-// 몬스터 기본 체력/보상. 몬스터를 잡을수록 이전 몬스터보다 강해진다 (기준값 1.12배)
+// 몬스터 기본 체력/보상. 스테이지가 하나 오를 때마다 이전 스테이지 × 1.12배로 강해진다
 export const monsterBaseHp = 30;
 export const monsterHpGrowth = 1.12;
 export const monsterBaseGold = 5;
 export const monsterBaseExp = 8;
 
-// 1단계에서는 몬스터 종류를 하나만 쓴다. 실제 지역별 몬스터는 6번(지역) 단계에서 추가.
-export const placeholderMonster = { name: "슬라임", emoji: "🟢" };
+// 지역 하나 = 스테이지 10개. 스테이지마다 일반 몬스터 10마리 + 정예 몬스터 1마리를 잡으면 다음 스테이지로.
+export const stagesPerRegion = 10;
+export const killsPerStage = 10;
+export const eliteMultiplier = 3; // 정예 몬스터는 체력/보상이 일반 몬스터의 이만큼
+export const bossHpMultiplier = 15; // 지역 보스 체력 = 10스테이지 몬스터 체력 × 이 값
+export const bossRewardMultiplier = 20; // 지역 보스 보상 = 10스테이지 몬스터 보상 × 이 값
 
 // 방치 보상: 최대 몇 시간까지 자리를 비운 것으로 인정할지
 export const maxIdleHours = 12;
@@ -68,13 +72,32 @@ export function getExpToNextLevel(level) {
   return expBase + level * expPerLevel;
 }
 
-export function getMonsterMaxHp(killCount) {
-  return Math.round(monsterBaseHp * Math.pow(monsterHpGrowth, killCount));
+// 지역과 스테이지를 하나로 이어붙인 난이도 지수. (2번째 지역 1스테이지는 1번째 지역 11번째 스테이지와 같은 세기)
+export function getDifficultyIndex(regionIndex, stage) {
+  return regionIndex * stagesPerRegion + (stage - 1);
 }
 
-export function getMonsterReward(killCount) {
+export function getStageMonsterHp(regionIndex, stage) {
+  const index = getDifficultyIndex(regionIndex, stage);
+  return Math.round(monsterBaseHp * Math.pow(monsterHpGrowth, index));
+}
+
+export function getStageMonsterReward(regionIndex, stage) {
+  const index = getDifficultyIndex(regionIndex, stage);
   return {
-    gold: Math.round(monsterBaseGold * Math.pow(monsterHpGrowth, killCount)),
-    exp: Math.round(monsterBaseExp * Math.pow(monsterHpGrowth, killCount)),
+    gold: Math.round(monsterBaseGold * Math.pow(monsterHpGrowth, index)),
+    exp: Math.round(monsterBaseExp * Math.pow(monsterHpGrowth, index)),
+  };
+}
+
+export function getBossHp(regionIndex) {
+  return Math.round(getStageMonsterHp(regionIndex, stagesPerRegion) * bossHpMultiplier);
+}
+
+export function getBossReward(regionIndex) {
+  const base = getStageMonsterReward(regionIndex, stagesPerRegion);
+  return {
+    gold: Math.round(base.gold * bossRewardMultiplier),
+    exp: Math.round(base.exp * bossRewardMultiplier),
   };
 }

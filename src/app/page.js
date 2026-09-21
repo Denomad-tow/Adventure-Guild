@@ -7,39 +7,58 @@ import { supabase } from "@/lib/supabaseClient";
 import { formatNumber } from "@/lib/format";
 import ProgressBar from "@/components/ProgressBar";
 import WelcomeBackModal from "@/components/WelcomeBackModal";
+import BossResultModal from "@/components/BossResultModal";
+import RegionSelector from "@/components/RegionSelector";
+import { regions } from "@/config/regions";
 import {
   jobBattleStats,
-  placeholderMonster,
   getTotalAttack,
   getEnhanceAttackBonus,
   getExpToNextLevel,
-  getMonsterMaxHp,
-  getMonsterReward,
+  getStageMonsterHp,
+  getStageMonsterReward,
+  getBossHp,
+  getBossReward,
+  stagesPerRegion,
+  killsPerStage,
+  eliteMultiplier,
 } from "@/config/balance";
+
+function initialMonsterState(regionIndex, stage) {
+  const hp = getStageMonsterHp(regionIndex, stage);
+  return { monsterMaxHp: hp, monsterHp: hp };
+}
 
 const initialBattleState = {
   level: 1,
   exp: 0,
   gold: 0,
-  killCount: 0,
   enhanceLevel: 0,
-  monsterMaxHp: getMonsterMaxHp(0),
-  monsterHp: getMonsterMaxHp(0),
+  regionIndex: 0,
+  stage: 1,
+  killIndexInStage: 0,
+  isElite: false,
+  regionStage: regions.map(() => 1),
+  unlockedRegionIndex: 0,
+  ...initialMonsterState(0, 1),
 };
 
 // 몬스터가 데미지를 한 번 맞았을 때 다음 상태를 계산하는 순수 함수.
-// (몬스터가 죽으면 보상을 주고, 필요하면 레벨업까지 한 번에 처리한다)
+// (몬스터가 죽으면 보상을 주고, 필요하면 레벨업·다음 스테이지 진행까지 한 번에 처리한다)
 function applyHit(state, damage) {
   const remainingHp = state.monsterHp - damage;
   if (remainingHp > 0) {
     return { ...state, monsterHp: remainingHp };
   }
 
-  const reward = getMonsterReward(state.killCount);
+  const baseReward = getStageMonsterReward(state.regionIndex, state.stage);
+  const reward = state.isElite
+    ? { gold: baseReward.gold * eliteMultiplier, exp: baseReward.exp * eliteMultiplier }
+    : baseReward;
+
   let level = state.level;
   let exp = state.exp + reward.exp;
   const gold = state.gold + reward.gold;
-  const killCount = state.killCount + 1;
 
   let expToNext = getExpToNextLevel(level);
   while (exp >= expToNext) {
@@ -48,8 +67,37 @@ function applyHit(state, damage) {
     expToNext = getExpToNextLevel(level);
   }
 
-  const monsterMaxHp = getMonsterMaxHp(killCount);
-  return { ...state, level, exp, gold, killCount, monsterMaxHp, monsterHp: monsterMaxHp };
+  let killIndexInStage = state.killIndexInStage;
+  let stage = state.stage;
+  const regionStage = [...state.regionStage];
+
+  if (state.isElite) {
+    killIndexInStage = 0;
+    if (stage < stagesPerRegion) {
+      stage += 1;
+      regionStage[state.regionIndex] = stage;
+    }
+    // 마지막 스테이지(10)라면 그 자리에서 계속 파밍하며 보스 도전을 기다린다.
+  } else {
+    killIndexInStage += 1;
+  }
+  const isElite = killIndexInStage >= killsPerStage;
+
+  const baseHp = getStageMonsterHp(state.regionIndex, stage);
+  const monsterMaxHp = isElite ? baseHp * eliteMultiplier : baseHp;
+
+  return {
+    ...state,
+    level,
+    exp,
+    gold,
+    killIndexInStage,
+    stage,
+    regionStage,
+    isElite,
+    monsterMaxHp,
+    monsterHp: monsterMaxHp,
+  };
 }
 
 async function saveProgress(character, battle) {
@@ -61,9 +109,10 @@ async function saveProgress(character, battle) {
       progress: {
         exp: battle.exp,
         gold: battle.gold,
-        killCount: battle.killCount,
-        // 성장 탭에서 산 강화 단계는 여기서 건드리지 않고 그대로 들고 다닌다.
         enhanceLevel: battle.enhanceLevel,
+        regionIndex: battle.regionIndex,
+        regionStage: battle.regionStage,
+        unlockedRegionIndex: battle.unlockedRegionIndex,
         // 다음에 접속했을 때 이 시각을 기준으로 방치 보상을 계산한다.
         lastActiveAt: new Date().toISOString(),
       },
@@ -81,10 +130,13 @@ export default function AdventurePage() {
   const [showLevelUp, setShowLevelUp] = useState(false);
   const [attacking, setAttacking] = useState(false);
   const [monsterHurt, setMonsterHurt] = useState(false);
+  const [bossFightHp, setBossFightHp] = useState(null);
+  const [bossResult, setBossResult] = useState(null);
 
   const loadedRef = useRef(false);
   const battleRef = useRef(battle);
   const hitCounterRef = useRef(0);
+  const bossFightingRef = useRef(false);
 
   // 캐릭터 정보가 도착하면, 저장되어 있던 값으로 전투 상태를 한 번만 채운다.
   // (방치 보상 계산은 로그인 시점에 AuthContext에서 이미 끝난 상태로 넘어온다)
@@ -92,15 +144,22 @@ export default function AdventurePage() {
     if (character && !loadedRef.current) {
       loadedRef.current = true;
       const progress = character.progress ?? {};
+      const regionStage = progress.regionStage ?? regions.map(() => 1);
+      const regionIndex = progress.regionIndex ?? 0;
+      const stage = regionStage[regionIndex] ?? 1;
       const loaded = {
         level: character.level ?? 1,
         exp: progress.exp ?? 0,
         gold: progress.gold ?? 0,
-        killCount: progress.killCount ?? 0,
         enhanceLevel: progress.enhanceLevel ?? 0,
+        regionIndex,
+        stage,
+        killIndexInStage: 0,
+        isElite: false,
+        regionStage,
+        unlockedRegionIndex: progress.unlockedRegionIndex ?? 0,
       };
-      const monsterMaxHp = getMonsterMaxHp(loaded.killCount);
-      const state = { ...loaded, monsterMaxHp, monsterHp: monsterMaxHp };
+      const state = { ...loaded, ...initialMonsterState(regionIndex, stage) };
       battleRef.current = state;
       setBattle(state);
     }
@@ -113,7 +172,7 @@ export default function AdventurePage() {
     const intervalMs = 1000 / stats.attackSpeed;
 
     const timer = setInterval(() => {
-      if (!loadedRef.current) return;
+      if (!loadedRef.current || bossFightingRef.current) return;
       const current = battleRef.current;
       const attack = getTotalAttack(character.job, current.level, current.enhanceLevel);
       const isCrit = Math.random() < stats.critRate;
@@ -160,6 +219,95 @@ export default function AdventurePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [character?.user_id]);
 
+  function handleSelectRegion(index) {
+    const current = battleRef.current;
+    if (index > current.unlockedRegionIndex || index === current.regionIndex) return;
+    const stage = current.regionStage[index] ?? 1;
+    const next = {
+      ...current,
+      regionIndex: index,
+      stage,
+      killIndexInStage: 0,
+      isElite: false,
+      ...initialMonsterState(index, stage),
+    };
+    battleRef.current = next;
+    setBattle(next);
+  }
+
+  async function challengeBoss() {
+    const current = battleRef.current;
+    if (bossFightingRef.current || current.stage < stagesPerRegion) return;
+    bossFightingRef.current = true;
+
+    const regionIndex = current.regionIndex;
+    const region = regions[regionIndex];
+    const maxHp = getBossHp(regionIndex);
+    setBossFightHp({ hp: maxHp, maxHp });
+
+    const hits = 5;
+    for (let i = 0; i < hits; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      setBossFightHp((prev) => (prev ? { ...prev, hp: Math.max(0, prev.hp - maxHp / hits) } : prev));
+      setAttacking(true);
+      setTimeout(() => setAttacking(false), 250);
+      setMonsterHurt(true);
+      setTimeout(() => setMonsterHurt(false), 250);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const reward = getBossReward(regionIndex);
+    const newUnlocked = Math.max(current.unlockedRegionIndex, regionIndex + 1);
+    const justUnlockedNext = newUnlocked > current.unlockedRegionIndex && regionIndex + 1 < regions.length;
+
+    let nextRegionIndex = current.regionIndex;
+    let nextStage = current.stage;
+    const regionStage = [...current.regionStage];
+    if (justUnlockedNext) {
+      nextRegionIndex = regionIndex + 1;
+      nextStage = regionStage[nextRegionIndex] ?? 1;
+    }
+
+    let exp = current.exp + reward.exp;
+    let level = current.level;
+    let expToNext = getExpToNextLevel(level);
+    while (exp >= expToNext) {
+      exp -= expToNext;
+      level += 1;
+      expToNext = getExpToNextLevel(level);
+    }
+
+    const next = {
+      ...current,
+      gold: current.gold + reward.gold,
+      exp,
+      level,
+      unlockedRegionIndex: newUnlocked,
+      regionIndex: nextRegionIndex,
+      stage: nextStage,
+      regionStage,
+      killIndexInStage: 0,
+      isElite: false,
+      ...initialMonsterState(nextRegionIndex, nextStage),
+    };
+
+    battleRef.current = next;
+    setBattle(next);
+    setBossFightHp(null);
+    setBossResult({
+      bossName: region.boss.name,
+      bossEmoji: region.boss.emoji,
+      storyLine: region.clearStory,
+      gold: reward.gold,
+      exp: reward.exp,
+      justUnlockedNext,
+    });
+
+    await saveProgress(character, next);
+    await refreshCharacter();
+    bossFightingRef.current = false;
+  }
+
   if (!character || !job) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center text-sm text-zinc-400">
@@ -170,10 +318,14 @@ export default function AdventurePage() {
 
   const expToNext = getExpToNextLevel(battle.level);
   const attack = getTotalAttack(character.job, battle.level, battle.enhanceLevel);
+  const region = regions[battle.regionIndex];
+  const monsterInfo = region.monsters[battle.killIndexInStage % region.monsters.length];
+  const isBossReady = battle.stage >= stagesPerRegion;
 
   return (
-    <div className="flex flex-col gap-6 px-6 py-8">
+    <div className="flex flex-col gap-4 px-6 py-8">
       <WelcomeBackModal summary={welcomeSummary} onClose={clearWelcomeSummary} />
+      <BossResultModal result={bossResult} onClose={() => setBossResult(null)} />
 
       <div className="flex items-center gap-3">
         <span className="text-3xl">{job.emoji}</span>
@@ -206,6 +358,12 @@ export default function AdventurePage() {
         <span className="font-semibold text-amber-500">{formatNumber(battle.gold)} G</span>
       </div>
 
+      <RegionSelector
+        activeIndex={battle.regionIndex}
+        unlockedIndex={battle.unlockedRegionIndex}
+        onSelect={handleSelectRegion}
+      />
+
       {/* 모험 장면: 하늘/땅이 있는 2D 무대 위에서 캐릭터와 몬스터가 마주본다 */}
       <div
         className={`relative h-72 overflow-hidden rounded-2xl border border-zinc-200 shadow-inner dark:border-zinc-800 ${
@@ -234,17 +392,25 @@ export default function AdventurePage() {
           <div className="h-2 w-12 rounded-full bg-black/20 blur-[2px]" />
         </div>
 
-        {/* 몬스터 */}
+        {/* 몬스터 또는 보스 */}
         <div
           className={`absolute bottom-6 right-10 flex flex-col items-center ${
             monsterHurt ? "monster-hurt" : ""
           }`}
         >
           <div className="relative mb-1 w-16">
-            <ProgressBar value={battle.monsterHp} max={battle.monsterMaxHp} colorClassName="bg-red-500" heightClassName="h-1.5" />
+            <ProgressBar
+              value={bossFightHp ? bossFightHp.hp : battle.monsterHp}
+              max={bossFightHp ? bossFightHp.maxHp : battle.monsterMaxHp}
+              colorClassName={bossFightHp ? "bg-purple-500" : "bg-red-500"}
+              heightClassName="h-1.5"
+            />
           </div>
           <div className="relative text-6xl drop-shadow">
-            {placeholderMonster.emoji}
+            {bossFightHp ? region.boss.emoji : monsterInfo.emoji}
+            {battle.isElite && !bossFightHp && (
+              <span className="absolute -top-2 -right-1 text-lg">⭐</span>
+            )}
             {floatingNumbers.map((n) => (
               <span
                 key={n.id}
@@ -262,9 +428,29 @@ export default function AdventurePage() {
 
         {/* 몬스터 이름표 */}
         <div className="absolute bottom-1 right-6 text-[11px] font-medium text-emerald-900/70">
-          {placeholderMonster.name} · {battle.killCount + 1}번째
+          {bossFightHp
+            ? `${region.boss.name} 도전 중...`
+            : `${monsterInfo.name}${battle.isElite ? " (정예)" : ""} · ${region.name} ${battle.stage}스테이지`}
         </div>
       </div>
+
+      {isBossReady && !bossFightHp && (
+        <div className="flex items-center justify-between rounded-xl border border-purple-300 bg-purple-50 px-4 py-3 dark:border-purple-800 dark:bg-purple-950/30">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">{region.boss.emoji}</span>
+            <span className="text-sm font-medium text-zinc-950 dark:text-white">
+              지역 보스: {region.boss.name}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={challengeBoss}
+            className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white"
+          >
+            도전하기
+          </button>
+        </div>
+      )}
 
       <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
         모험 일지, 돌발 이벤트는 다음 단계에서 추가될 예정입니다.
