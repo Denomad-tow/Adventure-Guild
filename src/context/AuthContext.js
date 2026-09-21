@@ -44,17 +44,19 @@ export function AuthProvider({ children }) {
       const awaySeconds = Math.min(elapsedSeconds, maxIdleHours * 3600);
 
       if (awaySeconds >= minAwaySecondsForSummary) {
+        const enhanceLevel = progress.enhanceLevel ?? 0;
         const baseState = {
           level: data.level ?? 1,
           exp: progress.exp ?? 0,
           gold: progress.gold ?? 0,
           killCount: progress.killCount ?? 0,
         };
-        const result = simulateIdleProgress(baseState, awaySeconds, data.job);
+        const result = simulateIdleProgress(baseState, awaySeconds, data.job, enhanceLevel);
         const updatedProgress = {
           exp: result.exp,
           gold: result.gold,
           killCount: result.killCount,
+          enhanceLevel,
           lastActiveAt: new Date().toISOString(),
         };
 

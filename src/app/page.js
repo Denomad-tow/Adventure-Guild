@@ -10,7 +10,8 @@ import WelcomeBackModal from "@/components/WelcomeBackModal";
 import {
   jobBattleStats,
   placeholderMonster,
-  getAttackForLevel,
+  getTotalAttack,
+  getEnhanceAttackBonus,
   getExpToNextLevel,
   getMonsterMaxHp,
   getMonsterReward,
@@ -21,6 +22,7 @@ const initialBattleState = {
   exp: 0,
   gold: 0,
   killCount: 0,
+  enhanceLevel: 0,
   monsterMaxHp: getMonsterMaxHp(0),
   monsterHp: getMonsterMaxHp(0),
 };
@@ -60,6 +62,8 @@ async function saveProgress(character, battle) {
         exp: battle.exp,
         gold: battle.gold,
         killCount: battle.killCount,
+        // 성장 탭에서 산 강화 단계는 여기서 건드리지 않고 그대로 들고 다닌다.
+        enhanceLevel: battle.enhanceLevel,
         // 다음에 접속했을 때 이 시각을 기준으로 방치 보상을 계산한다.
         lastActiveAt: new Date().toISOString(),
       },
@@ -93,6 +97,7 @@ export default function AdventurePage() {
         exp: progress.exp ?? 0,
         gold: progress.gold ?? 0,
         killCount: progress.killCount ?? 0,
+        enhanceLevel: progress.enhanceLevel ?? 0,
       };
       const monsterMaxHp = getMonsterMaxHp(loaded.killCount);
       const state = { ...loaded, monsterMaxHp, monsterHp: monsterMaxHp };
@@ -110,7 +115,7 @@ export default function AdventurePage() {
     const timer = setInterval(() => {
       if (!loadedRef.current) return;
       const current = battleRef.current;
-      const attack = getAttackForLevel(character.job, current.level);
+      const attack = getTotalAttack(character.job, current.level, current.enhanceLevel);
       const isCrit = Math.random() < stats.critRate;
       const damage = Math.round(attack * (isCrit ? stats.critDamage : 1));
       const next = applyHit(current, damage);
@@ -144,11 +149,12 @@ export default function AdventurePage() {
     return () => clearInterval(timer);
   }, [character?.job, character?.user_id, character, refreshCharacter]);
 
-  // 화면을 나갈 때(다른 탭 이동 등) 지금까지 진행 상황을 저장
+  // 화면을 나갈 때(다른 탭 이동 등) 지금까지 진행 상황을 저장하고,
+  // 다른 탭(성장 등)에서도 최신 골드/레벨을 볼 수 있게 캐릭터 정보를 새로고침한다.
   useEffect(() => {
     return () => {
       if (loadedRef.current) {
-        saveProgress(character, battleRef.current);
+        saveProgress(character, battleRef.current).then(() => refreshCharacter());
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -163,7 +169,7 @@ export default function AdventurePage() {
   }
 
   const expToNext = getExpToNextLevel(battle.level);
-  const attack = getAttackForLevel(character.job, battle.level);
+  const attack = getTotalAttack(character.job, battle.level, battle.enhanceLevel);
 
   return (
     <div className="flex flex-col gap-6 px-6 py-8">
@@ -175,9 +181,20 @@ export default function AdventurePage() {
           <div className="flex items-baseline justify-between">
             <span className="font-semibold text-zinc-950 dark:text-white">
               {character.nickname} · Lv.{battle.level}
+              {battle.enhanceLevel > 0 && (
+                <span className="ml-1 text-xs font-normal text-emerald-500">
+                  (강화 +{battle.enhanceLevel})
+                </span>
+              )}
             </span>
             <span className="text-xs text-zinc-500 dark:text-zinc-400">
               공격력 {formatNumber(attack)}
+              {battle.enhanceLevel > 0 && (
+                <span className="text-emerald-500">
+                  {" "}
+                  (+{formatNumber(getEnhanceAttackBonus(battle.enhanceLevel))})
+                </span>
+              )}
             </span>
           </div>
           <ProgressBar value={battle.exp} max={expToNext} colorClassName="bg-sky-500" />

@@ -29,9 +29,39 @@ export const maxIdleHours = 12;
 // 이 시간(초)보다 짧게 자리를 비웠으면 "다녀오셨군요!" 창을 띄우지 않는다 (새로고침 등 방지)
 export const minAwaySecondsForSummary = 60;
 
+// 능력치 강화: 골드로 공격력을 영구적으로 올린다. 비용 = 기본값 × 1.15^(강화 레벨)
+export const enhanceBaseCost = 20;
+export const enhanceCostGrowth = 1.15;
+export const enhanceAttackBonus = 2;
+
 export function getAttackForLevel(jobId, level) {
   const base = jobBattleStats[jobId] ?? jobBattleStats.warrior;
   return base.attack + attackGrowthPerLevel * (level - 1);
+}
+
+// 한 번에 강화할 수 있는 횟수 (성장 탭의 1강화/10강화/100강화 선택지)
+export const enhanceBatchOptions = [1, 10, 100];
+
+export function getEnhanceCost(enhanceLevel) {
+  return Math.round(enhanceBaseCost * Math.pow(enhanceCostGrowth, enhanceLevel));
+}
+
+// 강화를 여러 번(count) 연달아 할 때 드는 총 비용
+export function getEnhanceTotalCost(enhanceLevel, count) {
+  let total = 0;
+  for (let i = 0; i < count; i++) {
+    total += getEnhanceCost(enhanceLevel + i);
+  }
+  return total;
+}
+
+export function getEnhanceAttackBonus(enhanceLevel) {
+  return enhanceLevel * enhanceAttackBonus;
+}
+
+// 실제 전투에 쓰이는 최종 공격력 = 레벨에 따른 공격력 + 강화로 얻은 보너스
+export function getTotalAttack(jobId, level, enhanceLevel) {
+  return getAttackForLevel(jobId, level) + getEnhanceAttackBonus(enhanceLevel);
 }
 
 export function getExpToNextLevel(level) {
