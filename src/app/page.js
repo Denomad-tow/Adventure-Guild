@@ -8,6 +8,7 @@ import { formatNumber } from "@/lib/format";
 import ProgressBar from "@/components/ProgressBar";
 import WelcomeBackModal from "@/components/WelcomeBackModal";
 import BossResultModal from "@/components/BossResultModal";
+import CheerNotificationModal from "@/components/CheerNotificationModal";
 import RegionSelector from "@/components/RegionSelector";
 import DropToast from "@/components/DropToast";
 import { regions } from "@/config/regions";
@@ -17,6 +18,8 @@ import { getJobSkills, getSkillMultiplier } from "@/config/skills";
 import { getTraitBonuses } from "@/config/traits";
 import { hasElementAdvantage, elementAdvantageMultiplier, getElement } from "@/config/elements";
 import { postGuildNews } from "@/lib/guildNews";
+import { hasActiveCheerBuff } from "@/lib/cheers";
+import { cheerBuffAttackPercent } from "@/config/guild";
 import {
   merchantCheckIntervalMs,
   merchantChancePerCheck,
@@ -151,7 +154,14 @@ async function saveProgress(character, battle) {
 }
 
 export default function AdventurePage() {
-  const { character, refreshCharacter, welcomeSummary, clearWelcomeSummary } = useAuth();
+  const {
+    character,
+    refreshCharacter,
+    welcomeSummary,
+    clearWelcomeSummary,
+    cheerNotifications,
+    clearCheerNotifications,
+  } = useAuth();
   const job = character ? getJob(character.job) : null;
 
   const [battle, setBattle] = useState(initialBattleState);
@@ -206,12 +216,14 @@ export default function AdventurePage() {
 
       // 장비 보너스를 불러오다 문제가 생기더라도, 레벨/골드 같은 진짜 캐릭터 정보는
       // 반드시 화면에 반영되어야 하므로 실패 시에도 보너스 0으로 계속 진행한다.
-      fetchEquippedBonuses(character.user_id)
-        .catch(() => emptyEquipBonuses)
-        .then((equipBonuses) => {
+      Promise.all([
+        fetchEquippedBonuses(character.user_id).catch(() => emptyEquipBonuses),
+        hasActiveCheerBuff(character.user_id).catch(() => false),
+      ]).then(([equipBonuses, cheerBuffActive]) => {
           const state = {
             ...loaded,
             equipBonuses: equipBonuses ?? emptyEquipBonuses,
+            cheerBuffActive,
             ...initialMonsterState(regionIndex, stage),
           };
           battleRef.current = state;
@@ -307,6 +319,9 @@ export default function AdventurePage() {
       if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
         attack *= elementAdvantageMultiplier;
       }
+      if (current.cheerBuffActive) {
+        attack *= 1 + cheerBuffAttackPercent / 100;
+      }
       const critRate = stats.critRate + equipBonuses.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
       const isCrit = Math.random() < critRate;
@@ -340,6 +355,9 @@ export default function AdventurePage() {
       const region = regions[current.regionIndex];
       if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
         attack *= elementAdvantageMultiplier;
+      }
+      if (current.cheerBuffActive) {
+        attack *= 1 + cheerBuffAttackPercent / 100;
       }
       const critRate = stats.critRate + equipBonuses.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
@@ -588,13 +606,15 @@ export default function AdventurePage() {
   const attack =
     (getTotalAttack(character.job, battle.level, battle.enhanceLevel) + equipBonuses.attackFlat) *
     (1 + traitBonuses.attackPercent / 100) *
-    (hasAdvantage ? elementAdvantageMultiplier : 1);
+    (hasAdvantage ? elementAdvantageMultiplier : 1) *
+    (battle.cheerBuffActive ? 1 + cheerBuffAttackPercent / 100 : 1);
   const monsterInfo = region.monsters[battle.killIndexInStage % region.monsters.length];
   const isBossReady = battle.stage >= stagesPerRegion;
 
   return (
     <div className="flex flex-col gap-4 px-6 py-8">
       <WelcomeBackModal summary={welcomeSummary} onClose={clearWelcomeSummary} />
+      <CheerNotificationModal cheers={cheerNotifications} onClose={clearCheerNotifications} />
       <BossResultModal result={bossResult} onClose={() => setBossResult(null)} />
 
       {eventMessage && (
@@ -652,6 +672,12 @@ export default function AdventurePage() {
           <span className="text-xs text-zinc-400">상성 없음</span>
         )}
       </div>
+
+      {battle.cheerBuffActive && (
+        <div className="rounded-lg bg-pink-100 px-4 py-2 text-center text-sm font-medium text-pink-700 dark:bg-pink-900/40 dark:text-pink-300">
+          📣 응원 버프 적용 중! 공격력 +{cheerBuffAttackPercent}%
+        </div>
+      )}
 
       <RegionSelector
         activeIndex={battle.regionIndex}

@@ -4,16 +4,63 @@ import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 import { formatRelativeTime } from "@/lib/format";
+import { getJob } from "@/config/jobs";
+import { sendCheer, getRemainingCheersToday } from "@/lib/cheers";
+import { cheerDailyLimit, cheerContributionReward } from "@/config/guild";
 
 const reactionEmojis = ["👏", "😂", "😭", "🔥"];
 const NEWS_LIMIT = 30;
 
 export default function GuildPage() {
-  const { character } = useAuth();
+  const { character, refreshCharacter } = useAuth();
   const [news, setNews] = useState([]);
   const [reactionsByNews, setReactionsByNews] = useState({});
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState(null);
+  const [roster, setRoster] = useState([]);
+  const [remainingCheers, setRemainingCheers] = useState(cheerDailyLimit);
+  const [cheerBusyId, setCheerBusyId] = useState(null);
+  const [cheerMessage, setCheerMessage] = useState(null);
+
+  const loadRoster = useCallback(async (userId) => {
+    if (!userId) return;
+    const [{ data: rosterData }, remaining] = await Promise.all([
+      supabase.from("guild_roster").select("*").neq("user_id", userId),
+      getRemainingCheersToday(userId),
+    ]);
+    setRoster(rosterData ?? []);
+    setRemainingCheers(remaining);
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadRoster(character?.user_id);
+  }, [character?.user_id, loadRoster]);
+
+  async function handleSendCheer(receiver) {
+    if (!character || cheerBusyId || remainingCheers <= 0) return;
+    setCheerBusyId(receiver.user_id);
+
+    const { error } = await sendCheer(character.user_id, character.nickname, receiver.user_id);
+    if (!error) {
+      const progress = character.progress ?? {};
+      await supabase
+        .from("characters")
+        .update({
+          progress: {
+            ...progress,
+            guildContribution: (progress.guildContribution ?? 0) + cheerContributionReward,
+          },
+        })
+        .eq("user_id", character.user_id);
+      await refreshCharacter();
+      setCheerMessage(`${receiver.nickname}님에게 응원을 보냈습니다!`);
+      setTimeout(() => setCheerMessage(null), 2500);
+    }
+
+    await loadRoster(character.user_id);
+    setCheerBusyId(null);
+  }
 
   const loadFeed = useCallback(async () => {
     setLoading(true);
@@ -74,6 +121,48 @@ export default function GuildPage() {
 
   return (
     <div className="flex flex-col gap-4 px-6 py-8">
+      {cheerMessage && (
+        <div className="rounded-lg bg-pink-100 px-4 py-2 text-center text-sm font-medium text-pink-700 dark:bg-pink-900/40 dark:text-pink-300">
+          {cheerMessage}
+        </div>
+      )}
+
+      <div>
+        <div className="flex items-center justify-between">
+          <h1 className="text-lg font-bold text-zinc-950 dark:text-white">길드원</h1>
+          <span className="text-xs text-zinc-500 dark:text-zinc-400">
+            오늘 남은 응원 {remainingCheers}/{cheerDailyLimit}
+          </span>
+        </div>
+        {roster.length === 0 ? (
+          <p className="mt-2 text-center text-sm text-zinc-400">아직 다른 길드원이 없습니다.</p>
+        ) : (
+          <div className="mt-2 flex flex-col gap-2">
+            {roster.map((member) => {
+              const job = getJob(member.job);
+              return (
+                <div
+                  key={member.user_id}
+                  className="flex items-center justify-between rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900"
+                >
+                  <span className="text-zinc-950 dark:text-white">
+                    {job?.emoji ?? "🙂"} {member.nickname} · Lv.{member.level}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleSendCheer(member)}
+                    disabled={cheerBusyId === member.user_id || remainingCheers <= 0}
+                    className="rounded-lg bg-pink-500 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
+                  >
+                    📣 응원
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold text-zinc-950 dark:text-white">길드 소식</h1>
         <button

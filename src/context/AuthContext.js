@@ -9,6 +9,7 @@ import { regions } from "@/config/regions";
 import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import { getMySessionId, setMySessionId, createSessionId } from "@/lib/sessionGuard";
 import { pickJournalLines } from "@/config/journalTemplates";
+import { fetchAndConsumeUnseenCheers } from "@/lib/cheers";
 
 const OTHER_LOCATION_MESSAGE = "다른 곳에서 접속하였습니다.";
 
@@ -18,6 +19,7 @@ export function AuthProvider({ children }) {
   const [session, setSession] = useState(undefined); // undefined = 확인 중, null = 로그아웃 상태
   const [character, setCharacter] = useState(null);
   const [welcomeSummary, setWelcomeSummary] = useState(null);
+  const [cheerNotifications, setCheerNotifications] = useState([]);
 
   // 방치 보상은 "로그인(진짜로 다시 들어왔을 때)" 기준으로 한 번만 계산해야 한다.
   // 하단 탭을 옮겨다닐 때마다 화면이 다시 켜지는 것과는 구분해야 하므로,
@@ -72,6 +74,11 @@ export function AuthProvider({ children }) {
 
     if (idleCheckedUserIdRef.current !== userId) {
       idleCheckedUserIdRef.current = userId;
+
+      // 이번 로그인에서 한 번만, 아직 못 본 응원이 있는지 확인해서 알림을 보여준다.
+      fetchAndConsumeUnseenCheers(userId).then((unseen) => {
+        if (unseen.length > 0) setCheerNotifications(unseen);
+      });
 
       const progress = data.progress ?? {};
       const lastActiveAt = progress.lastActiveAt ? new Date(progress.lastActiveAt).getTime() : null;
@@ -193,7 +200,7 @@ export function AuthProvider({ children }) {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "characters", filter: `user_id=eq.${userId}` },
         (payload) => {
-          console.log("[세션 감시] 변경 감지:", payload.new.active_session_id, "내 세션:", getMySessionId());
+          if (skipSessionCheckRef.current) return;
           const incomingSessionId = payload.new.active_session_id;
           const localSessionId = getMySessionId();
           if (incomingSessionId && localSessionId && incomingSessionId !== localSessionId) {
@@ -203,9 +210,7 @@ export function AuthProvider({ children }) {
           }
         }
       )
-      .subscribe((status, err) => {
-        console.log("[세션 감시] 채널 상태:", status, err ?? "");
-      });
+      .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
@@ -219,6 +224,8 @@ export function AuthProvider({ children }) {
     refreshCharacter,
     welcomeSummary,
     clearWelcomeSummary: () => setWelcomeSummary(null),
+    cheerNotifications,
+    clearCheerNotifications: () => setCheerNotifications([]),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
