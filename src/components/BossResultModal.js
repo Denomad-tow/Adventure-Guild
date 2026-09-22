@@ -33,6 +33,12 @@ export default function BossResultModal({ result, onClose }) {
           </p>
         )}
 
+        {result.mercenary && (
+          <p className="mt-3 text-sm font-semibold text-sky-500">
+            🤝 {result.mercenary.nickname}님을 용병으로 데려가서 보상 +{result.mercenary.rewardBonusPercent}%!
+          </p>
+        )}
+
         <button
           type="button"
           onClick={onClose}

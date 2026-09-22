@@ -20,6 +20,8 @@ import { hasElementAdvantage, elementAdvantageMultiplier, getElement } from "@/c
 import { postGuildNews } from "@/lib/guildNews";
 import { hasActiveCheerBuff } from "@/lib/cheers";
 import { cheerBuffAttackPercent } from "@/config/guild";
+import { getRemainingHiresToday, hireMercenary } from "@/lib/mercenary";
+import { mercenaryDailyLimit, getMercenaryRewardBonusPercent } from "@/config/mercenary";
 import {
   merchantCheckIntervalMs,
   merchantChancePerCheck,
@@ -177,6 +179,10 @@ export default function AdventurePage() {
   const [merchant, setMerchant] = useState(null);
   const [goblin, setGoblin] = useState(null);
   const [eventMessage, setEventMessage] = useState(null);
+  const [roster, setRoster] = useState([]);
+  const [remainingHires, setRemainingHires] = useState(mercenaryDailyLimit);
+  const [showMercenaryPicker, setShowMercenaryPicker] = useState(false);
+  const [selectedMercenary, setSelectedMercenary] = useState(null);
 
   const loadedRef = useRef(false);
   // ready(state)는 렌더링용이고, readyRef는 이 값이 정말 최신인지 클린업(언마운트) 시점에서도
@@ -233,6 +239,17 @@ export default function AdventurePage() {
         });
     }
   }, [character]);
+
+  // 용병 목록(길드원)과 오늘 남은 용병 횟수를 한 번 불러온다.
+  useEffect(() => {
+    if (!character?.user_id) return;
+    supabase
+      .from("guild_roster")
+      .select("*")
+      .neq("user_id", character.user_id)
+      .then(({ data }) => setRoster(data ?? []));
+    getRemainingHiresToday(character.user_id).then(setRemainingHires);
+  }, [character?.user_id]);
 
   // 공격 한 번(일반 공격이든 스킬이든)의 결과 처리를 한곳에 모아둔다.
   function processHit({ damage, isCrit, label, color }) {
@@ -509,6 +526,9 @@ export default function AdventurePage() {
     if (bossFightingRef.current || current.stage < stagesPerRegion) return;
     bossFightingRef.current = true;
 
+    const mercenary = selectedMercenary;
+    const rewardBonusPercent = mercenary ? getMercenaryRewardBonusPercent(mercenary.level) : 0;
+
     const regionIndex = current.regionIndex;
     const region = regions[regionIndex];
     const maxHp = getBossHp(regionIndex);
@@ -525,7 +545,11 @@ export default function AdventurePage() {
     }
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    const reward = getBossReward(regionIndex);
+    const baseReward = getBossReward(regionIndex);
+    const reward = {
+      gold: Math.round(baseReward.gold * (1 + rewardBonusPercent / 100)),
+      exp: Math.round(baseReward.exp * (1 + rewardBonusPercent / 100)),
+    };
     const newUnlocked = Math.max(current.unlockedRegionIndex, regionIndex + 1);
     const justUnlockedNext = newUnlocked > current.unlockedRegionIndex && regionIndex + 1 < regions.length;
 
@@ -575,6 +599,7 @@ export default function AdventurePage() {
       gold: bossGold,
       exp: reward.exp,
       justUnlockedNext,
+      mercenary: mercenary ? { nickname: mercenary.nickname, rewardBonusPercent } : null,
     });
 
     if (justUnlockedNext) {
@@ -583,6 +608,12 @@ export default function AdventurePage() {
         character.nickname,
         `${character.nickname}님이 ${regions[nextRegionIndex].name}을 개척했습니다!`
       );
+    }
+
+    if (mercenary) {
+      await hireMercenary(character.user_id, character.nickname, mercenary, regionIndex);
+      setRemainingHires((prev) => Math.max(0, prev - 1));
+      setSelectedMercenary(null);
     }
 
     await saveProgress(character, next);
@@ -774,20 +805,80 @@ export default function AdventurePage() {
       </div>
 
       {isBossReady && !bossFightHp && (
-        <div className="flex items-center justify-between rounded-xl border border-purple-300 bg-purple-50 px-4 py-3 dark:border-purple-800 dark:bg-purple-950/30">
-          <div className="flex items-center gap-2">
-            <span className="text-2xl">{region.boss.emoji}</span>
-            <span className="text-sm font-medium text-zinc-950 dark:text-white">
-              지역 보스: {region.boss.name}
-            </span>
+        <div className="flex flex-col gap-2 rounded-xl border border-purple-300 bg-purple-50 px-4 py-3 dark:border-purple-800 dark:bg-purple-950/30">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">{region.boss.emoji}</span>
+              <span className="text-sm font-medium text-zinc-950 dark:text-white">
+                지역 보스: {region.boss.name}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={challengeBoss}
+              className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              도전하기
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={challengeBoss}
-            className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white"
-          >
-            도전하기
-          </button>
+
+          <div className="flex items-center justify-between text-xs">
+            {selectedMercenary ? (
+              <span className="text-sky-600 dark:text-sky-400">
+                🤝 {selectedMercenary.nickname}(Lv.{selectedMercenary.level})과 함께 도전 (보상 +
+                {getMercenaryRewardBonusPercent(selectedMercenary.level)}%)
+              </span>
+            ) : (
+              <span className="text-zinc-400">용병 없이 도전</span>
+            )}
+            <div className="flex items-center gap-2">
+              {selectedMercenary && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedMercenary(null)}
+                  className="text-zinc-400 underline"
+                >
+                  취소
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowMercenaryPicker((v) => !v)}
+                disabled={remainingHires <= 0 || roster.length === 0}
+                className="rounded-lg border border-purple-300 px-2 py-1 font-medium text-purple-600 disabled:opacity-40 dark:border-purple-700 dark:text-purple-300"
+              >
+                🤝 용병 데려가기 ({remainingHires}/{mercenaryDailyLimit})
+              </button>
+            </div>
+          </div>
+
+          {showMercenaryPicker && (
+            <div className="flex flex-col gap-1 rounded-lg bg-white p-2 dark:bg-zinc-900">
+              {roster.length === 0 ? (
+                <p className="text-center text-xs text-zinc-400">아직 다른 길드원이 없습니다.</p>
+              ) : (
+                roster.map((member) => {
+                  const memberJob = getJob(member.job);
+                  return (
+                    <button
+                      key={member.user_id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedMercenary(member);
+                        setShowMercenaryPicker(false);
+                      }}
+                      className="flex items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                      <span>
+                        {memberJob?.emoji ?? "🙂"} {member.nickname} · Lv.{member.level}
+                      </span>
+                      <span className="text-sky-500">+{getMercenaryRewardBonusPercent(member.level)}%</span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          )}
         </div>
       )}
 
