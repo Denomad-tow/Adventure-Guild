@@ -1,4 +1,4 @@
-import { getGrade, getSlot } from "@/config/equipment";
+import { getGrade, getSlot, getItemType } from "@/config/equipment";
 
 export default function DropToast({ drops }) {
   if (drops.length === 0) return null;
@@ -8,13 +8,14 @@ export default function DropToast({ drops }) {
       {drops.map((drop) => {
         const grade = getGrade(drop.grade);
         const slot = getSlot(drop.slot);
+        const itemType = getItemType(drop.slot, drop.itemType);
         return (
           <div
             key={drop.id}
             className="level-up-pop rounded-full border px-3 py-1 text-xs font-semibold shadow"
             style={{ borderColor: grade.color, color: grade.color, background: "rgba(255,255,255,0.9)" }}
           >
-            ✨ {slot.emoji} {grade.label} {slot.label} 획득!
+            ✨ {itemType?.emoji ?? slot.emoji} {grade.label} {itemType?.label ?? slot.label} 획득!
           </div>
         );
       })}

@@ -23,6 +23,8 @@ import { getElement } from "@/config/elements";
 import { getGrade } from "@/config/equipment";
 import { regions } from "@/config/regions";
 import { applyQuestDeltas } from "@/lib/quests";
+import { getAchievement } from "@/config/achievements";
+import { applyAchievementUnlock } from "@/lib/achievements";
 
 const reactionEmojis = ["👏", "😂", "😭", "🔥"];
 const NEWS_LIMIT = 30;
@@ -144,6 +146,15 @@ export default function GuildPage() {
           character.nickname,
           `${character.nickname}님이 ${defeatedLord.name} 처치 보상으로 ${getGrade(result.my_loot_grade).label} 장비를 얻었습니다!`
         );
+      }
+
+      const finalBlowAchievement = getAchievement("worldBossFinalBlow");
+      const progress = character.progress ?? {};
+      if (!(progress.achievements ?? []).includes(finalBlowAchievement.id)) {
+        await supabase
+          .from("characters")
+          .update({ progress: applyAchievementUnlock(progress, finalBlowAchievement.id) })
+          .eq("user_id", character.user_id);
       }
     } else if (result.phase_event_started) {
       setBossMessage(`${formatNumber(damage)}의 피해! 페이즈 돌입 - 30분간 길드 전체 피해 2배!`);
@@ -404,7 +415,11 @@ export default function GuildPage() {
                   }`}
                 >
                   <span className="text-zinc-950 dark:text-white">
-                    {i + 1}. {memberJob?.emoji ?? "🙂"} {member.nickname}
+                    {i + 1}. {memberJob?.emoji ?? "🙂"}{" "}
+                    {member.equipped_title && (
+                      <span className="text-xs text-amber-500">[{member.equipped_title}] </span>
+                    )}
+                    {member.nickname}
                     {isMe && " (나)"}
                   </span>
                   <span className="font-semibold text-zinc-600 dark:text-zinc-300">{valueText}</span>

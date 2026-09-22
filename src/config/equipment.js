@@ -46,8 +46,94 @@ export const equipmentSlots = [
   { id: "armor", label: "갑옷", emoji: "🥋" },
   { id: "gloves", label: "장갑", emoji: "🧤" },
   { id: "boots", label: "신발", emoji: "👢" },
-  { id: "accessory", label: "장신구", emoji: "💍" },
+  { id: "belt", label: "벨트", emoji: "➰" },
+  { id: "necklace", label: "목걸이", emoji: "📿" },
+  { id: "bracelet", label: "팔찌", emoji: "💫" },
+  { id: "ring1", label: "반지1", emoji: "💍" },
+  { id: "ring2", label: "반지2", emoji: "💍" },
 ];
+
+// 부위마다 이름/이모지가 다른 장비 종류 5가지. 능력치에는 영향 없고 보여지는 모습만 다르다.
+// (두 반지 칸(ring1, ring2)은 같은 "반지" 종류 목록을 공유한다)
+const ringItemTypes = [
+  { id: "ring", label: "반지", emoji: "💍" },
+  { id: "signetRing", label: "인장반지", emoji: "🔱" },
+  { id: "gemRing", label: "보석반지", emoji: "💎" },
+  { id: "knotRing", label: "매듭반지", emoji: "➰" },
+  { id: "enchantRing", label: "인챈트반지", emoji: "✨" },
+];
+
+export const itemTypesBySlot = {
+  weapon: [
+    { id: "sword", label: "검", emoji: "🗡️" },
+    { id: "axe", label: "도끼", emoji: "🪓" },
+    { id: "staff", label: "지팡이", emoji: "🪄" },
+    { id: "bow", label: "활", emoji: "🏹" },
+    { id: "dagger", label: "단검", emoji: "🔪" },
+  ],
+  helmet: [
+    { id: "hat", label: "모자", emoji: "🎩" },
+    { id: "helm", label: "투구", emoji: "⛑️" },
+    { id: "hood", label: "두건", emoji: "🥷" },
+    { id: "crown", label: "왕관", emoji: "👑" },
+    { id: "mask", label: "가면", emoji: "🎭" },
+  ],
+  armor: [
+    { id: "robe", label: "로브", emoji: "🥋" },
+    { id: "plate", label: "판금갑옷", emoji: "🛡️" },
+    { id: "leather", label: "가죽옷", emoji: "🦺" },
+    { id: "chainmail", label: "사슬갑옷", emoji: "⛓️" },
+    { id: "coat", label: "코트", emoji: "🧥" },
+  ],
+  gloves: [
+    { id: "gloves", label: "장갑", emoji: "🧤" },
+    { id: "gauntlet", label: "건틀릿", emoji: "👊" },
+    { id: "wristguard", label: "손목보호대", emoji: "💪" },
+    { id: "claw", label: "클로", emoji: "🦞" },
+    { id: "mitt", label: "미트", emoji: "🥊" },
+  ],
+  boots: [
+    { id: "shoes", label: "신발", emoji: "👟" },
+    { id: "boots", label: "부츠", emoji: "👢" },
+    { id: "sandals", label: "샌들", emoji: "🩴" },
+    { id: "greaves", label: "각반", emoji: "🥾" },
+    { id: "slippers", label: "슬리퍼", emoji: "🥿" },
+  ],
+  belt: [
+    { id: "belt", label: "벨트", emoji: "➰" },
+    { id: "sash", label: "허리띠", emoji: "🎗️" },
+    { id: "chainBelt", label: "사슬벨트", emoji: "⛓️" },
+    { id: "leatherBelt", label: "가죽벨트", emoji: "🟤" },
+    { id: "jewelBelt", label: "보석벨트", emoji: "💎" },
+  ],
+  necklace: [
+    { id: "necklace", label: "목걸이", emoji: "📿" },
+    { id: "pendant", label: "펜던트", emoji: "🔮" },
+    { id: "choker", label: "초커", emoji: "⚫" },
+    { id: "amulet", label: "부적", emoji: "🧿" },
+    { id: "cameo", label: "카메오", emoji: "🖼️" },
+  ],
+  bracelet: [
+    { id: "bracelet", label: "팔찌", emoji: "💫" },
+    { id: "bangle", label: "뱅글", emoji: "⭕" },
+    { id: "wristband", label: "손목보호대", emoji: "🎗️" },
+    { id: "charmBracelet", label: "참팔찌", emoji: "🔔" },
+    { id: "chainBracelet", label: "사슬팔찌", emoji: "⛓️" },
+  ],
+  ring1: ringItemTypes,
+  ring2: ringItemTypes,
+};
+
+export function getItemType(slotId, itemTypeId) {
+  const pool = itemTypesBySlot[slotId] ?? [];
+  return pool.find((t) => t.id === itemTypeId) ?? null;
+}
+
+function rollItemType(slotId) {
+  const pool = itemTypesBySlot[slotId] ?? [];
+  if (pool.length === 0) return null;
+  return pool[Math.floor(Math.random() * pool.length)].id;
+}
 
 // 등급 순서 그대로가 약한 것 → 강한 것. dropRate 합은 1이 되어야 한다.
 export const grades = [
@@ -146,7 +232,8 @@ export function rollEquipmentDrop(setId, bonusDropChance = 0) {
   const options = rollOptions(grade);
   // 무기는 속성을 하나씩 지니고 있어서, 지역 속성에 맞춰 무기를 바꿔 낄 수 있다.
   const element = slot === "weapon" ? rollRandomElement() : null;
-  return { slot, grade, options, setId: setId ?? null, element };
+  const itemType = rollItemType(slot);
+  return { slot, grade, options, setId: setId ?? null, element, itemType };
 }
 
 export function getDisassembleReward(gradeId) {
@@ -174,7 +261,8 @@ export function rollMerchantItem(minGradeId = "rare") {
   const slot = equipmentSlots[Math.floor(Math.random() * equipmentSlots.length)].id;
   const options = rollOptions(grade);
   const element = slot === "weapon" ? rollRandomElement() : null;
-  return { slot, grade, options, setId: null, element };
+  const itemType = rollItemType(slot);
+  return { slot, grade, options, setId: null, element, itemType };
 }
 
 export function getMerchantPrice(gradeId, priceMultiplier) {

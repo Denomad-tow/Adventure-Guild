@@ -12,7 +12,7 @@ import CheerNotificationModal from "@/components/CheerNotificationModal";
 import RegionSelector from "@/components/RegionSelector";
 import DropToast from "@/components/DropToast";
 import { regions } from "@/config/regions";
-import { rollEquipmentDrop, rollMerchantItem, getMerchantPrice, getGrade, getSlot } from "@/config/equipment";
+import { rollEquipmentDrop, rollMerchantItem, getMerchantPrice, getGrade, getSlot, getItemType } from "@/config/equipment";
 import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import { getJobSkills, getSkillMultiplier } from "@/config/skills";
 import { getTraitBonuses } from "@/config/traits";
@@ -24,6 +24,10 @@ import { getRemainingHiresToday, hireMercenary } from "@/lib/mercenary";
 import { mercenaryDailyLimit, getMercenaryRewardBonusPercent } from "@/config/mercenary";
 import { applyQuestDeltas } from "@/lib/quests";
 import { addGuildQuestKills } from "@/lib/guildQuest";
+import { getMonsterKey, getDexBonusPercent, applyDexKills, getCompletedRegionCount } from "@/lib/monsterDex";
+import { regionDexCompleteBonusPercent } from "@/config/monsterDex";
+import { getAchievement } from "@/config/achievements";
+import { applyAchievementUnlock } from "@/lib/achievements";
 import {
   merchantCheckIntervalMs,
   merchantChancePerCheck,
@@ -142,25 +146,35 @@ async function saveProgress(character, battle, questDeltas) {
   if (!character) return;
   const progress = character.progress ?? {};
   const quests = questDeltas ? applyQuestDeltas(progress.quests, questDeltas) : progress.quests;
+  const monsterDex = questDeltas?.dex ? applyDexKills(progress.monsterDex, questDeltas.dex) : progress.monsterDex;
+
+  const priorLifetimeKills = progress.lifetimeKills ?? 0;
+  const lifetimeKills = priorLifetimeKills + (questDeltas?.kills ?? 0);
+
+  let nextProgress = {
+    // 가방 탭의 강화석, 성장 탭의 특성처럼, 모험 탭이 다루지 않는 값들은 그대로 보존한다.
+    ...progress,
+    exp: battle.exp,
+    gold: battle.gold,
+    enhanceLevel: battle.enhanceLevel,
+    regionIndex: battle.regionIndex,
+    regionStage: battle.regionStage,
+    unlockedRegionIndex: battle.unlockedRegionIndex,
+    // 다음에 접속했을 때 이 시각을 기준으로 방치 보상을 계산한다.
+    lastActiveAt: new Date().toISOString(),
+    ...(quests ? { quests } : {}),
+    ...(monsterDex ? { monsterDex } : {}),
+    lifetimeKills,
+  };
+
+  const killsAchievement = getAchievement("kills10000");
+  if (priorLifetimeKills < killsAchievement.target && lifetimeKills >= killsAchievement.target) {
+    nextProgress = applyAchievementUnlock(nextProgress, killsAchievement.id);
+  }
 
   await supabase
     .from("characters")
-    .update({
-      level: battle.level,
-      progress: {
-        // 가방 탭의 강화석, 성장 탭의 특성처럼, 모험 탭이 다루지 않는 값들은 그대로 보존한다.
-        ...progress,
-        exp: battle.exp,
-        gold: battle.gold,
-        enhanceLevel: battle.enhanceLevel,
-        regionIndex: battle.regionIndex,
-        regionStage: battle.regionStage,
-        unlockedRegionIndex: battle.unlockedRegionIndex,
-        // 다음에 접속했을 때 이 시각을 기준으로 방치 보상을 계산한다.
-        lastActiveAt: new Date().toISOString(),
-        ...(quests ? { quests } : {}),
-      },
-    })
+    .update({ level: battle.level, progress: nextProgress })
     .eq("user_id", character.user_id);
 
   if (questDeltas?.kills) {
@@ -210,6 +224,8 @@ export default function AdventurePage() {
   const goblinRef = useRef(null);
   // 마지막 저장 이후 쌓인 몬스터 처치 수. 매번 저장하지 않고, 다음 저장 시점에 한꺼번에 반영한다.
   const questKillsRef = useRef(0);
+  // 마지막 저장 이후 쌓인, 몬스터 종류별 처치 수(도감용). { "forest:슬라임": 3, ... } 형태.
+  const dexKillsRef = useRef({});
   // character(state)는 effect가 등록된 시점의 값을 그대로 들고 있어서(리렌더 시 재등록되지 않는 effect의
   // 클린업/인터벌 안에서는) 오래된 값일 수 있다. 저장할 때는 항상 이 ref로 최신 값을 읽어서,
   // 다른 탭에서 방금 바뀐 진행도(퀘스트 등)를 되돌려쓰지 않게 한다.
@@ -220,9 +236,25 @@ export default function AdventurePage() {
   }, [character]);
 
   function flushQuestDeltas(extra = {}) {
-    const deltas = { kills: questKillsRef.current, ...extra };
+    const deltas = { kills: questKillsRef.current, dex: dexKillsRef.current, ...extra };
     questKillsRef.current = 0;
+    dexKillsRef.current = {};
     return deltas;
+  }
+
+  // 지금 상대하는 몬스터의 도감 등급 보너스 + 완성한 지역 도감 보너스를 합친 공격력 증가율(%).
+  // 아직 저장 전(dexKillsRef에만 쌓인) 처치 수도 함께 반영해서 등급이 오르는 순간 바로 체감되게 한다.
+  function getDexAttackBonusPercent(current) {
+    const region = regions[current.regionIndex];
+    const monsterName = region.monsters[current.killIndexInStage % region.monsters.length].name;
+    const dexKey = getMonsterKey(region.id, monsterName);
+    const combinedDex = { ...(current.monsterDex ?? {}) };
+    for (const [key, amount] of Object.entries(dexKillsRef.current)) {
+      combinedDex[key] = (combinedDex[key] ?? 0) + amount;
+    }
+    const monsterBonus = getDexBonusPercent(combinedDex[dexKey] ?? 0);
+    const regionBonus = getCompletedRegionCount(combinedDex, regions) * regionDexCompleteBonusPercent;
+    return monsterBonus + regionBonus;
   }
 
   // 캐릭터 정보가 도착하면, 저장되어 있던 값으로 전투 상태를 한 번만 채운다.
@@ -247,6 +279,7 @@ export default function AdventurePage() {
         unlockedRegionIndex: progress.unlockedRegionIndex ?? 0,
         traitBonuses: getTraitBonuses(progress.traits),
         skillLevels: progress.skillLevels ?? {},
+        monsterDex: progress.monsterDex ?? {},
       };
 
       // 장비 보너스를 불러오다 문제가 생기더라도, 레벨/골드 같은 진짜 캐릭터 정보는
@@ -302,6 +335,10 @@ export default function AdventurePage() {
 
     if (next.killed) {
       questKillsRef.current += 1;
+      const region = regions[current.regionIndex];
+      const monsterName = region.monsters[current.killIndexInStage % region.monsters.length].name;
+      const dexKey = getMonsterKey(region.id, monsterName);
+      dexKillsRef.current[dexKey] = (dexKillsRef.current[dexKey] ?? 0) + 1;
     }
 
     const hitId = ++hitCounterRef.current;
@@ -332,24 +369,25 @@ export default function AdventurePage() {
           options: drop.options,
           set_id: drop.setId,
           element: drop.element,
+          item_type: drop.itemType,
         })
         .then(({ error }) => {
           if (error) {
             console.error("장비 저장 실패:", error.message);
             return;
           }
-          setDrops((prev) => [...prev, { id: dropId, slot: drop.slot, grade: drop.grade }]);
+          setDrops((prev) => [...prev, { id: dropId, slot: drop.slot, grade: drop.grade, itemType: drop.itemType }]);
           setTimeout(() => {
             setDrops((prev) => prev.filter((d) => d.id !== dropId));
           }, 3000);
 
           if (drop.grade === "legendary" || drop.grade === "mythic") {
             const gradeLabel = getGrade(drop.grade).label;
-            const slotLabel = getSlot(drop.slot).label;
+            const itemLabel = getItemType(drop.slot, drop.itemType)?.label ?? getSlot(drop.slot).label;
             postGuildNews(
               character.user_id,
               character.nickname,
-              `${character.nickname}님이 ${gradeLabel} 장비 [${slotLabel}]을 획득했습니다!`
+              `${character.nickname}님이 ${gradeLabel} 장비 [${itemLabel}]을 획득했습니다!`
             );
           }
         });
@@ -385,6 +423,7 @@ export default function AdventurePage() {
       if (current.cheerBuffActive) {
         attack *= 1 + cheerBuffAttackPercent / 100;
       }
+      attack *= 1 + getDexAttackBonusPercent(current) / 100;
       const critRate = stats.critRate + equipBonuses.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
       const isCrit = Math.random() < critRate;
@@ -422,6 +461,7 @@ export default function AdventurePage() {
       if (current.cheerBuffActive) {
         attack *= 1 + cheerBuffAttackPercent / 100;
       }
+      attack *= 1 + getDexAttackBonusPercent(current) / 100;
       const critRate = stats.critRate + equipBonuses.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
 
@@ -502,6 +542,7 @@ export default function AdventurePage() {
       options: merchant.item.options,
       set_id: merchant.item.setId,
       element: merchant.item.element,
+      item_type: merchant.item.itemType,
     });
     if (error) {
       console.error("상인 장비 구매 실패:", error.message);
@@ -513,7 +554,9 @@ export default function AdventurePage() {
     setBattle(next);
     merchantRef.current = null;
     setMerchant(null);
-    setEventMessage(`${getGrade(merchant.item.grade).label} ${getSlot(merchant.item.slot).label}을(를) 구매했습니다!`);
+    const merchantItemLabel =
+      getItemType(merchant.item.slot, merchant.item.itemType)?.label ?? getSlot(merchant.item.slot).label;
+    setEventMessage(`${getGrade(merchant.item.grade).label} ${merchantItemLabel}을(를) 구매했습니다!`);
     setTimeout(() => setEventMessage(null), 2500);
 
     await saveProgress(characterRef.current, next, flushQuestDeltas());
@@ -680,12 +723,17 @@ export default function AdventurePage() {
   const traitBonuses = battle.traitBonuses ?? emptyTraitBonuses;
   const region = regions[battle.regionIndex];
   const hasAdvantage = hasElementAdvantage(equipBonuses.weaponElement, region.element);
+  const monsterInfo = region.monsters[battle.killIndexInStage % region.monsters.length];
+  const dexKey = getMonsterKey(region.id, monsterInfo.name);
+  const dexBonusPercent =
+    getDexBonusPercent(battle.monsterDex?.[dexKey] ?? 0) +
+    getCompletedRegionCount(battle.monsterDex, regions) * regionDexCompleteBonusPercent;
   const attack =
     (getTotalAttack(character.job, battle.level, battle.enhanceLevel) + equipBonuses.attackFlat) *
     (1 + traitBonuses.attackPercent / 100) *
     (hasAdvantage ? elementAdvantageMultiplier : 1) *
-    (battle.cheerBuffActive ? 1 + cheerBuffAttackPercent / 100 : 1);
-  const monsterInfo = region.monsters[battle.killIndexInStage % region.monsters.length];
+    (battle.cheerBuffActive ? 1 + cheerBuffAttackPercent / 100 : 1) *
+    (1 + dexBonusPercent / 100);
   const isBossReady = battle.stage >= stagesPerRegion;
 
   return (
@@ -705,6 +753,11 @@ export default function AdventurePage() {
         <div className="flex-1">
           <div className="flex items-baseline justify-between">
             <span className="font-semibold text-zinc-950 dark:text-white">
+              {character.progress?.equippedTitle && (
+                <span className="mr-1 text-xs font-normal text-amber-500">
+                  [{character.progress.equippedTitle}]
+                </span>
+              )}
               {character.nickname} · Lv.{battle.level}
               {battle.enhanceLevel > 0 && (
                 <span className="ml-1 text-xs font-normal text-emerald-500">
@@ -749,6 +802,12 @@ export default function AdventurePage() {
           <span className="text-xs text-zinc-400">상성 없음</span>
         )}
       </div>
+
+      {dexBonusPercent > 0 && (
+        <div className="rounded-lg bg-emerald-100 px-4 py-2 text-center text-sm font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+          📖 도감 보너스로 이 몬스터 상대 피해 +{dexBonusPercent}%
+        </div>
+      )}
 
       {battle.cheerBuffActive && (
         <div className="rounded-lg bg-pink-100 px-4 py-2 text-center text-sm font-medium text-pink-700 dark:bg-pink-900/40 dark:text-pink-300">
@@ -936,7 +995,8 @@ export default function AdventurePage() {
               <p className="text-sm font-medium text-zinc-950 dark:text-white">
                 방랑 상인:{" "}
                 <span style={{ color: getGrade(merchant.item.grade).color }}>
-                  {getGrade(merchant.item.grade).label} {getSlot(merchant.item.slot).label}
+                  {getGrade(merchant.item.grade).label}{" "}
+                  {getItemType(merchant.item.slot, merchant.item.itemType)?.label ?? getSlot(merchant.item.slot).label}
                 </span>
               </p>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">잠시 후 떠납니다.</p>

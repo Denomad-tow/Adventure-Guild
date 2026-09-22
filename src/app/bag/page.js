@@ -9,6 +9,7 @@ import {
   grades,
   getGrade,
   getSlot,
+  getItemType,
   getOptionType,
   getGradeIndex,
   getDisassembleReward,
@@ -23,6 +24,8 @@ import {
 } from "@/config/equipment";
 import { getElement } from "@/config/elements";
 import { postGuildNews } from "@/lib/guildNews";
+import { getAchievement } from "@/config/achievements";
+import { applyAchievementUnlock } from "@/lib/achievements";
 
 const rareOrBelowIndex = getGradeIndex("rare");
 const defaultBulkGrades = grades.filter((g) => getGradeIndex(g.id) <= rareOrBelowIndex).map((g) => g.id);
@@ -179,7 +182,18 @@ export default function BagPage() {
     const newLevel = success ? currentLevel + 1 : currentLevel;
 
     await supabase.from("equipment").update({ enhance_level: newLevel }).eq("id", item.id);
-    await updateProgress({ enhancementStones: stones - cost });
+
+    const enhanceFailStreak = success ? 0 : (progress.enhanceFailStreak ?? 0) + 1;
+    let nextProgress = { ...progress, enhancementStones: stones - cost, enhanceFailStreak };
+    if (success && newLevel >= getAchievement("enhance15").target) {
+      nextProgress = applyAchievementUnlock(nextProgress, "enhance15");
+    }
+    if (!success && enhanceFailStreak >= getAchievement("enhanceFailStreak10").target) {
+      nextProgress = applyAchievementUnlock(nextProgress, "enhanceFailStreak10");
+    }
+    await supabase.from("characters").update({ progress: nextProgress }).eq("user_id", character.user_id);
+    await refreshCharacter();
+
     await loadItems(character.user_id);
     setEnhanceResult({ success });
     setTimeout(() => setEnhanceResult(null), 2000);
@@ -232,10 +246,11 @@ export default function BagPage() {
             ⚡ 자동 장착
           </button>
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-5 gap-2">
           {equipmentSlots.map((slot) => {
             const item = equippedBySlot[slot.id];
             const grade = item ? getGrade(item.grade) : null;
+            const itemType = item ? getItemType(slot.id, item.item_type) : null;
             return (
               <button
                 key={slot.id}
@@ -253,14 +268,14 @@ export default function BagPage() {
                     +{item.enhance_level}
                   </span>
                 )}
-                <span className="text-2xl">{slot.emoji}</span>
+                <span className="text-2xl">{itemType?.emoji ?? slot.emoji}</span>
                 {item?.element && (
                   <span className="absolute bottom-1 left-1 text-xs">
                     {getElement(item.element)?.emoji}
                   </span>
                 )}
                 <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                  {grade ? grade.label : slot.label}
+                  {itemType?.label ?? slot.label}
                 </span>
               </button>
             );
@@ -372,6 +387,7 @@ export default function BagPage() {
             {filteredItems.map((item) => {
               const grade = getGrade(item.grade);
               const slot = getSlot(item.slot);
+              const itemType = getItemType(item.slot, item.item_type);
               const equippedItem = equippedBySlot[item.slot];
               const equippedGradeIndex = equippedItem ? getGradeIndex(equippedItem.grade) : -1;
               const itemGradeIndex = getGradeIndex(item.grade);
@@ -396,7 +412,7 @@ export default function BagPage() {
                       +{item.enhance_level}
                     </span>
                   )}
-                  <span className="text-2xl">{slot.emoji}</span>
+                  <span className="text-2xl">{itemType?.emoji ?? slot.emoji}</span>
                   {item.element && (
                     <span className="absolute bottom-1 left-1 text-xs">
                       {getElement(item.element)?.emoji}
@@ -421,10 +437,13 @@ export default function BagPage() {
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center">
           <div className="w-full max-w-sm rounded-t-2xl bg-white p-5 sm:rounded-2xl dark:bg-zinc-900">
             <div className="flex items-center gap-2">
-              <span className="text-3xl">{getSlot(selectedItem.slot).emoji}</span>
+              <span className="text-3xl">
+                {getItemType(selectedItem.slot, selectedItem.item_type)?.emoji ?? getSlot(selectedItem.slot).emoji}
+              </span>
               <div>
                 <p className="text-base font-bold" style={{ color: getGrade(selectedItem.grade).color }}>
-                  {getGrade(selectedItem.grade).label} {getSlot(selectedItem.slot).label}
+                  {getGrade(selectedItem.grade).label}{" "}
+                  {getItemType(selectedItem.slot, selectedItem.item_type)?.label ?? getSlot(selectedItem.slot).label}
                   {selectedItem.enhance_level > 0 && (
                     <span className="ml-1 text-sky-500">+{selectedItem.enhance_level}</span>
                   )}
