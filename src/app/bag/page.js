@@ -26,6 +26,8 @@ import { getElement } from "@/config/elements";
 import { postGuildNews } from "@/lib/guildNews";
 import { getAchievement } from "@/config/achievements";
 import { applyAchievementUnlock } from "@/lib/achievements";
+import { fetchGuildTownBonuses } from "@/lib/guildTown";
+import { emptyGuildTownBonuses } from "@/config/guildTown";
 
 const rareOrBelowIndex = getGradeIndex("rare");
 const defaultBulkGrades = grades.filter((g) => getGradeIndex(g.id) <= rareOrBelowIndex).map((g) => g.id);
@@ -40,6 +42,7 @@ export default function BagPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkGrades, setBulkGrades] = useState(defaultBulkGrades);
   const [enhanceResult, setEnhanceResult] = useState(null);
+  const [guildBonuses, setGuildBonuses] = useState(emptyGuildTownBonuses);
 
   const loadItems = useCallback(async (userId) => {
     if (!userId) return;
@@ -70,6 +73,9 @@ export default function BagPage() {
         setItems(data ?? []);
         setLoading(false);
       });
+    fetchGuildTownBonuses()
+      .then(setGuildBonuses)
+      .catch(() => setGuildBonuses(emptyGuildTownBonuses));
   }, [character?.user_id]);
 
   if (!character) {
@@ -155,7 +161,12 @@ export default function BagPage() {
   async function handleDisassemble(item) {
     if (item.equipped) return;
     setBusy(true);
-    await supabase.from("equipment").delete().eq("id", item.id);
+    const { error } = await supabase.from("equipment").delete().eq("id", item.id);
+    if (error) {
+      console.error("장비 분해 실패:", error.message);
+      setBusy(false);
+      return;
+    }
     await updateProgress({ enhancementStones: stones + getDisassembleReward(item.grade) });
     await loadItems(character.user_id);
     setSelectedId(null);
@@ -165,7 +176,12 @@ export default function BagPage() {
   async function handleSell(item) {
     if (item.equipped) return;
     setBusy(true);
-    await supabase.from("equipment").delete().eq("id", item.id);
+    const { error } = await supabase.from("equipment").delete().eq("id", item.id);
+    if (error) {
+      console.error("장비 판매 실패:", error.message);
+      setBusy(false);
+      return;
+    }
     await updateProgress({ gold: gold + getSellReward(item.grade) });
     await loadItems(character.user_id);
     setSelectedId(null);
@@ -178,7 +194,7 @@ export default function BagPage() {
     if (currentLevel >= maxItemEnhanceLevel || stones < cost) return;
 
     setBusy(true);
-    const success = rollItemEnhanceSuccess(currentLevel);
+    const success = rollItemEnhanceSuccess(currentLevel, guildBonuses.forgeSuccessBonusPercent);
     const newLevel = success ? currentLevel + 1 : currentLevel;
 
     await supabase.from("equipment").update({ enhance_level: newLevel }).eq("id", item.id);
@@ -211,10 +227,18 @@ export default function BagPage() {
   async function handleBulkDisassemble() {
     if (bulkTargets.length === 0) return;
     setBulkBusy(true);
-    await supabase
-      .from("equipment")
-      .delete()
-      .in("id", bulkTargets.map((item) => item.id));
+    // 한 번에 너무 많은 id를 보내면 요청 주소가 길어져 서버가 거부하므로, 묶어서 나눠 보낸다.
+    const ids = bulkTargets.map((item) => item.id);
+    const chunkSize = 50;
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize);
+      const { error } = await supabase.from("equipment").delete().in("id", chunk);
+      if (error) {
+        console.error("일괄 분해 실패:", error.message);
+        setBulkBusy(false);
+        return;
+      }
+    }
     await updateProgress({ enhancementStones: stones + bulkStoneTotal });
     await loadItems(character.user_id);
     setBulkBusy(false);
@@ -512,7 +536,9 @@ export default function BagPage() {
                 {(selectedItem.enhance_level ?? 0) >= enhanceFailureStartLevel && (
                   <span className="text-xs text-red-500">
                     성공률{" "}
-                    {Math.round(getItemEnhanceSuccessRate(selectedItem.enhance_level ?? 0) * 100)}%
+                    {Math.round(
+                      getItemEnhanceSuccessRate(selectedItem.enhance_level ?? 0, guildBonuses.forgeSuccessBonusPercent) * 100
+                    )}%
                   </span>
                 )}
               </div>

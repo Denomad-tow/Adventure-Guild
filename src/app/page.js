@@ -28,6 +28,8 @@ import { getMonsterKey, getDexBonusPercent, applyDexKills, getCompletedRegionCou
 import { regionDexCompleteBonusPercent } from "@/config/monsterDex";
 import { getAchievement } from "@/config/achievements";
 import { applyAchievementUnlock } from "@/lib/achievements";
+import { fetchGuildTownBonuses } from "@/lib/guildTown";
+import { emptyGuildTownBonuses } from "@/config/guildTown";
 import {
   merchantCheckIntervalMs,
   merchantChancePerCheck,
@@ -91,11 +93,13 @@ function applyHit(state, damage) {
     : baseReward;
 
   let level = state.level;
-  let exp = state.exp + reward.exp;
   const equipBonuses = state.equipBonuses ?? emptyEquipBonuses;
   const traitBonuses = state.traitBonuses ?? emptyTraitBonuses;
-  const goldMultiplier = 1 + (equipBonuses.goldFind + traitBonuses.goldFindPercent) / 100;
+  const guildBonuses = state.guildBonuses ?? emptyGuildTownBonuses;
+  const goldMultiplier = 1 + (equipBonuses.goldFind + traitBonuses.goldFindPercent + guildBonuses.treasuryGoldBonusPercent) / 100;
+  const expMultiplier = 1 + guildBonuses.trainingExpBonusPercent / 100;
   const gold = state.gold + Math.round(reward.gold * goldMultiplier);
+  let exp = state.exp + Math.round(reward.exp * expMultiplier);
   const droppedItem = rollEquipmentDrop(regions[state.regionIndex]?.id, traitBonuses.dropChancePercent);
 
   let expToNext = getExpToNextLevel(level);
@@ -287,11 +291,13 @@ export default function AdventurePage() {
       Promise.all([
         fetchEquippedBonuses(character.user_id).catch(() => emptyEquipBonuses),
         hasActiveCheerBuff(character.user_id).catch(() => false),
-      ]).then(([equipBonuses, cheerBuffActive]) => {
+        fetchGuildTownBonuses().catch(() => emptyGuildTownBonuses),
+      ]).then(([equipBonuses, cheerBuffActive, guildBonuses]) => {
           const state = {
             ...loaded,
             equipBonuses: equipBonuses ?? emptyEquipBonuses,
             cheerBuffActive,
+            guildBonuses: guildBonuses ?? emptyGuildTownBonuses,
             ...initialMonsterState(regionIndex, stage),
           };
           battleRef.current = state;
@@ -471,7 +477,8 @@ export default function AdventurePage() {
         if (now - last >= skill.cooldown * 1000) {
           skillLastTriggeredRef.current[skill.id] = now;
           const skillLevel = current.skillLevels?.[skill.id] ?? 0;
-          const multiplier = getSkillMultiplier(skill, skillLevel);
+          const guildBonuses = current.guildBonuses ?? emptyGuildTownBonuses;
+          const multiplier = getSkillMultiplier(skill, skillLevel) * (1 + guildBonuses.magicTowerDamageBonusPercent / 100);
           const isCrit = Math.random() < critRate;
           const damage = Math.round(attack * multiplier * (isCrit ? critDamage : 1));
           processHit({ damage, isCrit, label: skill.name, color: "#a855f7" });

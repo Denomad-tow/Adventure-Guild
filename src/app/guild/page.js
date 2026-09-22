@@ -25,6 +25,10 @@ import { regions } from "@/config/regions";
 import { applyQuestDeltas } from "@/lib/quests";
 import { getAchievement } from "@/config/achievements";
 import { applyAchievementUnlock } from "@/lib/achievements";
+import { fetchGuildBuildings, fetchBuildingContributionBoard, contributeToBuilding } from "@/lib/guildTown";
+import { guildBuildings, getBuildingUpgradeCost, getBuildingEffectValue, guildBuildingMaxLevel } from "@/config/guildTown";
+
+const contributionPresets = [1000, 10000, 100000];
 
 const reactionEmojis = ["👏", "😂", "😭", "🔥"];
 const NEWS_LIMIT = 30;
@@ -70,6 +74,68 @@ export default function GuildPage() {
       .select("*")
       .then(({ data }) => setRankingBoard(data ?? []));
   }, [character?.user_id]);
+
+  const [townBuildings, setTownBuildings] = useState({});
+  const [expandedBuilding, setExpandedBuilding] = useState(null);
+  const [buildingBoards, setBuildingBoards] = useState({});
+  const [contributeBusy, setContributeBusy] = useState(null);
+  const [contributeMessage, setContributeMessage] = useState(null);
+
+  const loadTownBuildings = useCallback(async () => {
+    const buildings = await fetchGuildBuildings();
+    setTownBuildings(buildings);
+  }, []);
+
+  useEffect(() => {
+    if (!character?.user_id) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadTownBuildings();
+  }, [character?.user_id, loadTownBuildings]);
+
+  async function toggleBuildingBoard(buildingId) {
+    if (expandedBuilding === buildingId) {
+      setExpandedBuilding(null);
+      return;
+    }
+    setExpandedBuilding(buildingId);
+    if (!buildingBoards[buildingId]) {
+      const board = await fetchBuildingContributionBoard(buildingId);
+      setBuildingBoards((prev) => ({ ...prev, [buildingId]: board }));
+    }
+  }
+
+  async function handleContribute(buildingId, amount) {
+    if (!character || contributeBusy) return;
+    if ((character.progress?.gold ?? 0) < amount) return;
+    setContributeBusy(buildingId);
+
+    const { result, error } = await contributeToBuilding(buildingId, amount);
+    if (error) {
+      console.error("길드 마을 기부 실패:", error.message);
+      setContributeBusy(null);
+      return;
+    }
+
+    const building = guildBuildings.find((b) => b.id === buildingId);
+    setContributeMessage(`${building.name}에 ${formatNumber(amount)}G 기부했습니다!`);
+    setTimeout(() => setContributeMessage(null), 2500);
+
+    if (result.leveled_up) {
+      postGuildNews(
+        character.user_id,
+        character.nickname,
+        `${character.nickname}님의 기부로 ${building.name}이(가) Lv.${result.result_level}(으)로 올랐습니다!`
+      );
+    }
+
+    await loadTownBuildings();
+    if (buildingBoards[buildingId]) {
+      const board = await fetchBuildingContributionBoard(buildingId);
+      setBuildingBoards((prev) => ({ ...prev, [buildingId]: board }));
+    }
+    await refreshCharacter();
+    setContributeBusy(null);
+  }
 
   const loadWorldBoss = useCallback(async (userId, lordIndexHint) => {
     const state = await fetchWorldBossState();
@@ -266,6 +332,14 @@ export default function GuildPage() {
     setBusyKey(null);
   }
 
+  if (!character) {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center text-sm text-zinc-400">
+        캐릭터 정보를 불러오는 중...
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4 px-6 py-8">
       {cheerMessage && (
@@ -429,6 +503,92 @@ export default function GuildPage() {
         </div>
       </div>
 
+      <div>
+        <h1 className="text-lg font-bold text-zinc-950 dark:text-white">길드 마을</h1>
+        {contributeMessage && (
+          <p className="mt-1 text-center text-xs font-medium text-emerald-600 dark:text-emerald-400">
+            {contributeMessage}
+          </p>
+        )}
+        <div className="mt-2 flex flex-col gap-2">
+          {guildBuildings.map((building) => {
+            const state = townBuildings[building.id] ?? { level: 0, progress_gold: 0 };
+            const maxed = state.level >= guildBuildingMaxLevel;
+            const cost = maxed ? null : getBuildingUpgradeCost(state.level);
+            const effectValue = getBuildingEffectValue(building.id, state.level);
+            const board = buildingBoards[building.id];
+            const expanded = expandedBuilding === building.id;
+            return (
+              <div key={building.id} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-zinc-950 dark:text-white">
+                    {building.icon} {building.name} Lv.{state.level}
+                  </span>
+                  <span className="text-xs text-emerald-500">
+                    {building.effectLabel} +{effectValue}
+                    {building.effectSuffix}
+                  </span>
+                </div>
+                {!maxed ? (
+                  <div className="mt-2">
+                    <ProgressBar
+                      value={state.progress_gold}
+                      max={cost}
+                      colorClassName="bg-amber-500"
+                      heightClassName="h-1.5"
+                    />
+                    <p className="mt-1 text-right text-[11px] text-zinc-400">
+                      {formatNumber(state.progress_gold)} / {formatNumber(cost)}G
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-center text-xs text-zinc-400">최대 레벨입니다.</p>
+                )}
+                <div className="mt-2 flex gap-1.5">
+                  {contributionPresets.map((amount) => (
+                    <button
+                      key={amount}
+                      type="button"
+                      onClick={() => handleContribute(building.id, amount)}
+                      disabled={maxed || Boolean(contributeBusy) || (character.progress?.gold ?? 0) < amount}
+                      className="flex-1 rounded-lg border border-amber-400 py-1.5 text-xs font-medium text-amber-600 disabled:opacity-40 dark:text-amber-400"
+                    >
+                      {formatNumber(amount)}G
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleBuildingBoard(building.id)}
+                  className="mt-2 w-full text-center text-[11px] text-zinc-400 underline"
+                >
+                  {expanded ? "기부 순위 접기" : "기부 순위 보기"}
+                </button>
+                {expanded && (
+                  <div className="mt-1 flex flex-col gap-1">
+                    {(board ?? []).length === 0 ? (
+                      <p className="text-center text-[11px] text-zinc-400">아직 기부한 사람이 없습니다.</p>
+                    ) : (
+                      board.map((row, i) => (
+                        <div
+                          key={row.nickname}
+                          className="flex justify-between text-[11px] text-zinc-500 dark:text-zinc-400"
+                        >
+                          <span>
+                            {i + 1}. {row.nickname}
+                          </span>
+                          <span>{formatNumber(row.amount)}G</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold text-zinc-950 dark:text-white">길드 소식</h1>
         <button
@@ -496,7 +656,7 @@ export default function GuildPage() {
       )}
 
       <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        길드 마을, 파견은 다음 단계들에서 추가될 예정입니다.
+        파견은 다음 단계들에서 추가될 예정입니다.
       </p>
     </div>
   );

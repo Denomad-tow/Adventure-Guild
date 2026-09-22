@@ -12,6 +12,8 @@ import { regions } from "@/config/regions";
 import { monsterDexTierLabels, regionDexCompleteBonusPercent } from "@/config/monsterDex";
 import { getMonsterKey, getDexTier, getDexBonusPercent, isRegionDexComplete, getCompletedRegionCount } from "@/lib/monsterDex";
 import { achievements } from "@/config/achievements";
+import { fetchGuildTownBonuses } from "@/lib/guildTown";
+import { emptyGuildTownBonuses } from "@/config/guildTown";
 
 const moreTabs = [
   { id: "quests", label: "퀘스트" },
@@ -31,11 +33,15 @@ export default function MorePage() {
   const [guildQuestProgress, setGuildQuestProgress] = useState(0);
   const [worldBossWeeklyCount, setWorldBossWeeklyCount] = useState(0);
   const [claimBusy, setClaimBusy] = useState(false);
+  const [guildTownBonuses, setGuildTownBonuses] = useState(emptyGuildTownBonuses);
 
   useEffect(() => {
     if (!character?.user_id) return;
     fetchGuildQuestProgress().then((result) => setGuildQuestProgress(result.killCount));
     countWorldBossChallengesThisWeek(character.user_id).then(setWorldBossWeeklyCount);
+    fetchGuildTownBonuses()
+      .then(setGuildTownBonuses)
+      .catch(() => setGuildTownBonuses(emptyGuildTownBonuses));
   }, [character?.user_id]);
 
   function openConfirm() {
@@ -95,6 +101,7 @@ export default function MorePage() {
   const unlockedTitles = progress.unlockedTitles ?? [];
   const equippedTitle = progress.equippedTitle ?? null;
   const completedRegionCount = getCompletedRegionCount(monsterDex, regions);
+  const dailyBoxReward = Math.round(dailyBonusBoxGold * (1 + guildTownBonuses.guildBoardRewardBonusPercent / 100));
 
   async function updateProgress(updater) {
     setClaimBusy(true);
@@ -110,7 +117,7 @@ export default function MorePage() {
     if (claimBusy || !canClaimDailyBox) return;
     await updateProgress((p) => ({
       ...p,
-      gold: (p.gold ?? 0) + dailyBonusBoxGold,
+      gold: (p.gold ?? 0) + dailyBoxReward,
       quests: applyQuestDeltas(p.quests, { dailyBoxClaimed: true }),
     }));
   }
@@ -190,7 +197,7 @@ export default function MorePage() {
             >
               {quests.daily.boxClaimed
                 ? "오늘 보너스 상자 수령 완료"
-                : `보너스 상자 수령하기 (+${formatNumber(dailyBonusBoxGold)}G)`}
+                : `보너스 상자 수령하기 (+${formatNumber(dailyBoxReward)}G)`}
             </button>
           </div>
 

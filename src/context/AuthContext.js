@@ -10,6 +10,8 @@ import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import { getMySessionId, setMySessionId, createSessionId } from "@/lib/sessionGuard";
 import { pickJournalLines } from "@/config/journalTemplates";
 import { fetchAndConsumeUnseenCheers } from "@/lib/cheers";
+import { fetchGuildTownBonuses } from "@/lib/guildTown";
+import { emptyGuildTownBonuses } from "@/config/guildTown";
 
 const OTHER_LOCATION_MESSAGE = "다른 곳에서 접속하였습니다.";
 
@@ -83,7 +85,9 @@ export function AuthProvider({ children }) {
       const progress = data.progress ?? {};
       const lastActiveAt = progress.lastActiveAt ? new Date(progress.lastActiveAt).getTime() : null;
       const elapsedSeconds = lastActiveAt ? Math.floor((Date.now() - lastActiveAt) / 1000) : 0;
-      const awaySeconds = Math.min(elapsedSeconds, maxIdleHours * 3600);
+      // 여관 건물 레벨만큼 방치 보상 최대 시간이 늘어난다.
+      const guildBonuses = await fetchGuildTownBonuses().catch(() => emptyGuildTownBonuses);
+      const awaySeconds = Math.min(elapsedSeconds, (maxIdleHours + guildBonuses.innExtraHours) * 3600);
 
       if (awaySeconds >= minAwaySecondsForSummary) {
         const enhanceLevel = progress.enhanceLevel ?? 0;

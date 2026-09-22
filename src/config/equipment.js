@@ -173,14 +173,16 @@ export function getItemEnhanceCost(currentLevel) {
   return 2 + currentLevel * 3;
 }
 
-export function getItemEnhanceSuccessRate(currentLevel) {
+// bonusPercent: 대장간 건물 레벨에서 오는 성공률 보너스(%포인트)
+export function getItemEnhanceSuccessRate(currentLevel, bonusPercent = 0) {
   if (currentLevel < enhanceFailureStartLevel) return 1;
-  return enhanceSuccessRates[currentLevel - enhanceFailureStartLevel] ?? 0.1;
+  const base = enhanceSuccessRates[currentLevel - enhanceFailureStartLevel] ?? 0.1;
+  return Math.min(1, base + bonusPercent / 100);
 }
 
 // 강화 시도 결과(성공/실패)를 굴린다.
-export function rollItemEnhanceSuccess(currentLevel) {
-  return Math.random() < getItemEnhanceSuccessRate(currentLevel);
+export function rollItemEnhanceSuccess(currentLevel, bonusPercent = 0) {
+  return Math.random() < getItemEnhanceSuccessRate(currentLevel, bonusPercent);
 }
 
 export function getGradeIndex(gradeId) {
