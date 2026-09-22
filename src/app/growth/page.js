@@ -30,6 +30,16 @@ import {
 } from "@/config/balance";
 import { applyQuestDeltas } from "@/lib/quests";
 import { advancedClassLevel, getAdvancedClasses, getAdvancedClass } from "@/config/advancedClasses";
+import { regions } from "@/config/regions";
+import {
+  prestigeRequiredRegionIndex,
+  relics,
+  relicMaxLevel,
+  getRelicCost,
+  getRelicEffectValue,
+  getSoulStonesForLevel,
+} from "@/config/prestige";
+import { getRelicBonuses } from "@/lib/prestige";
 
 export default function GrowthPage() {
   const { character, refreshCharacter } = useAuth();
@@ -41,6 +51,9 @@ export default function GrowthPage() {
   const [skillBusyId, setSkillBusyId] = useState(null);
   const [skillEnhanceResult, setSkillEnhanceResult] = useState(null);
   const [advancedClassBusy, setAdvancedClassBusy] = useState(false);
+  const [prestigeBusy, setPrestigeBusy] = useState(false);
+  const [showPrestigeConfirm, setShowPrestigeConfirm] = useState(false);
+  const [relicBusy, setRelicBusy] = useState(null);
   const enhancingRef = useRef(false);
 
   // 탭을 급하게 오갈 때 골드가 옛날 값으로 보이는 걸 줄이기 위해,
@@ -86,6 +99,12 @@ export default function GrowthPage() {
   const chosenAdvancedClass = progress.advancedClass
     ? getAdvancedClass(character.job, progress.advancedClass)
     : null;
+
+  const soulStones = progress.soulStones ?? 0;
+  const relicLevels = progress.relics ?? {};
+  const prestigeCount = progress.prestigeCount ?? 0;
+  const canPrestige = (progress.unlockedRegionIndex ?? 0) >= prestigeRequiredRegionIndex;
+  const soulStonesOnPrestige = getSoulStonesForLevel(character.level);
 
   async function handleEnhance() {
     // 응답이 오기 전에 버튼이 한 번 더 눌리는 걸 확실히 막는다 (ref는 즉시 반영되어 중복 클릭에 안전함).
@@ -158,6 +177,63 @@ export default function GrowthPage() {
     setAdvancedClassBusy(false);
   }
 
+  async function handleConfirmPrestige() {
+    if (prestigeBusy || !canPrestige) return;
+    setPrestigeBusy(true);
+
+    const relicBonuses = getRelicBonuses(progress.relics);
+    const nextProgress = {
+      // 유지되는 값들
+      monsterDex: progress.monsterDex ?? {},
+      achievements: progress.achievements ?? [],
+      unlockedTitles: progress.unlockedTitles ?? [],
+      equippedTitle: progress.equippedTitle ?? null,
+      relics: progress.relics ?? {},
+      soulStones: soulStones + soulStonesOnPrestige,
+      prestigeCount: prestigeCount + 1,
+      lifetimeKills: progress.lifetimeKills ?? 0,
+      guildContribution: progress.guildContribution ?? 0,
+      expedition: progress.expedition ?? null,
+      // 초기화되는 값들
+      gold: relicBonuses.startingGold,
+      exp: 0,
+      enhanceLevel: 0,
+      regionIndex: 0,
+      regionStage: regions.map(() => 1),
+      unlockedRegionIndex: 0,
+      traits: {},
+      skillLevels: {},
+      enhancementStones: 0,
+      advancedClass: null,
+      lastActiveAt: new Date().toISOString(),
+    };
+
+    await supabase.from("characters").update({ level: 1, progress: nextProgress }).eq("user_id", character.user_id);
+    await refreshCharacter();
+    setShowPrestigeConfirm(false);
+    setPrestigeBusy(false);
+  }
+
+  async function handleBuyRelic(relicId) {
+    const level = relicLevels[relicId] ?? 0;
+    if (relicBusy || level >= relicMaxLevel) return;
+    const cost = getRelicCost(relicId, level);
+    if (soulStones < cost) return;
+    setRelicBusy(relicId);
+    await supabase
+      .from("characters")
+      .update({
+        progress: {
+          ...progress,
+          soulStones: soulStones - cost,
+          relics: { ...relicLevels, [relicId]: level + 1 },
+        },
+      })
+      .eq("user_id", character.user_id);
+    await refreshCharacter();
+    setRelicBusy(null);
+  }
+
   async function handleResetTraits() {
     if (traitBusy || usedTraitPoints === 0 || gold < traitResetCost) return;
     setTraitBusy(true);
@@ -181,6 +257,7 @@ export default function GrowthPage() {
         <span className="text-3xl">{job.emoji}</span>
         <div>
           <p className="font-semibold text-zinc-950 dark:text-white">
+            {prestigeCount > 0 && <span className="mr-1 text-amber-500">{"⭐".repeat(Math.min(prestigeCount, 5))}</span>}
             {character.nickname} · Lv.{character.level}
           </p>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -402,9 +479,96 @@ export default function GrowthPage() {
         )}
       </div>
 
-      <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        환생은 다음 단계들에서 추가될 예정입니다.
-      </p>
+      {/* 유물 (영혼석으로 구매, 환생해도 유지) */}
+      <div className="rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">유물</h2>
+          <span className="text-xs font-medium text-purple-500">💎 {formatNumber(soulStones)}</span>
+        </div>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          영혼석으로 사는 영구 강화입니다. 환생해도 사라지지 않습니다.
+        </p>
+        <div className="mt-3 flex flex-col gap-2">
+          {relics.map((relic) => {
+            const level = relicLevels[relic.id] ?? 0;
+            const isMax = level >= relicMaxLevel;
+            const cost = isMax ? null : getRelicCost(relic.id, level);
+            const value = getRelicEffectValue(relic.id, level);
+            return (
+              <div key={relic.id} className="rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-950 dark:text-white">
+                    {relic.icon} {relic.name} Lv.{level}
+                  </span>
+                  <span className="text-xs text-emerald-500">
+                    {relic.description} +{formatNumber(value)}
+                    {relic.suffix}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleBuyRelic(relic.id)}
+                  disabled={relicBusy === relic.id || isMax || soulStones < cost}
+                  className="mt-2 w-full rounded-lg border border-purple-400 py-1.5 text-xs font-medium text-purple-600 disabled:opacity-40 dark:border-purple-700 dark:text-purple-400"
+                >
+                  {isMax ? "최대 레벨" : `구매 (💎${formatNumber(cost)})`}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 환생 */}
+      <div className="rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
+        <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">환생</h2>
+        {!canPrestige ? (
+          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+            {regions[prestigeRequiredRegionIndex - 1]?.name} 보스를 격파하면 환생할 수 있습니다.
+          </p>
+        ) : (
+          <>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              환생하면 레벨·골드·지역 진행·강화·특성·스킬·전직이 초기화되지만, 장비·도감·업적·칭호·영혼석·유물은 그대로 유지됩니다.
+            </p>
+            <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+              환생 시 받을 영혼석: <span className="font-semibold text-purple-500">💎 {soulStonesOnPrestige}</span>
+            </p>
+            {!showPrestigeConfirm ? (
+              <button
+                type="button"
+                onClick={() => setShowPrestigeConfirm(true)}
+                className="mt-3 w-full rounded-lg bg-purple-600 py-2.5 text-sm font-semibold text-white"
+              >
+                환생하기
+              </button>
+            ) : (
+              <div className="mt-3 flex flex-col gap-2 rounded-lg border border-purple-300 p-3 dark:border-purple-800">
+                <p className="text-xs font-medium text-purple-600 dark:text-purple-400">
+                  정말 환생하시겠습니까? 되돌릴 수 없습니다.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowPrestigeConfirm(false)}
+                    className="flex-1 rounded-lg border border-zinc-300 py-2 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
+                  >
+                    취소
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmPrestige}
+                    disabled={prestigeBusy}
+                    className="flex-1 rounded-lg bg-purple-600 py-2 text-xs font-semibold text-white disabled:opacity-40"
+                  >
+                    {prestigeBusy ? "처리 중..." : "환생 확정"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

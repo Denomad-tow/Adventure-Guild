@@ -12,6 +12,7 @@ import { pickJournalLines } from "@/config/journalTemplates";
 import { fetchAndConsumeUnseenCheers } from "@/lib/cheers";
 import { fetchGuildTownBonuses } from "@/lib/guildTown";
 import { emptyGuildTownBonuses } from "@/config/guildTown";
+import { getRelicBonuses } from "@/lib/prestige";
 
 const OTHER_LOCATION_MESSAGE = "다른 곳에서 접속하였습니다.";
 
@@ -85,9 +86,13 @@ export function AuthProvider({ children }) {
       const progress = data.progress ?? {};
       const lastActiveAt = progress.lastActiveAt ? new Date(progress.lastActiveAt).getTime() : null;
       const elapsedSeconds = lastActiveAt ? Math.floor((Date.now() - lastActiveAt) / 1000) : 0;
-      // 여관 건물 레벨만큼 방치 보상 최대 시간이 늘어난다.
+      // 여관 건물 레벨, 유물(시간의 모래)만큼 방치 보상 최대 시간이 늘어난다.
       const guildBonuses = await fetchGuildTownBonuses().catch(() => emptyGuildTownBonuses);
-      const awaySeconds = Math.min(elapsedSeconds, (maxIdleHours + guildBonuses.innExtraHours) * 3600);
+      const relicBonuses = getRelicBonuses(progress.relics);
+      const awaySeconds = Math.min(
+        elapsedSeconds,
+        (maxIdleHours + guildBonuses.innExtraHours + relicBonuses.idleHoursBonus) * 3600
+      );
 
       if (awaySeconds >= minAwaySecondsForSummary) {
         const enhanceLevel = progress.enhanceLevel ?? 0;

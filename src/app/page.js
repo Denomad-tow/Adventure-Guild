@@ -31,6 +31,7 @@ import { applyAchievementUnlock } from "@/lib/achievements";
 import { fetchGuildTownBonuses } from "@/lib/guildTown";
 import { emptyGuildTownBonuses } from "@/config/guildTown";
 import { getAdvancedClassBonuses, emptyAdvancedClassBonuses } from "@/config/advancedClasses";
+import { getRelicBonuses, emptyRelicBonuses } from "@/lib/prestige";
 import {
   merchantCheckIntervalMs,
   merchantChancePerCheck,
@@ -293,6 +294,8 @@ export default function AdventurePage() {
         skillLevels: progress.skillLevels ?? {},
         monsterDex: progress.monsterDex ?? {},
         advancedClassBonuses: getAdvancedClassBonuses(character.job, progress.advancedClass),
+        relicBonuses: getRelicBonuses(progress.relics),
+        prestigeCount: progress.prestigeCount ?? 0,
       };
 
       // 장비 보너스를 불러오다 문제가 생기더라도, 레벨/골드 같은 진짜 캐릭터 정보는
@@ -442,6 +445,8 @@ export default function AdventurePage() {
         attack *= 1 + cheerBuffAttackPercent / 100;
       }
       attack *= 1 + getDexAttackBonusPercent(current) / 100;
+      const relicBonuses = current.relicBonuses ?? emptyRelicBonuses;
+      attack *= 1 + relicBonuses.allDamagePercent / 100;
       const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100;
       const isCrit = Math.random() < critRate;
@@ -481,6 +486,8 @@ export default function AdventurePage() {
         attack *= 1 + cheerBuffAttackPercent / 100;
       }
       attack *= 1 + getDexAttackBonusPercent(current) / 100;
+      const relicBonuses = current.relicBonuses ?? emptyRelicBonuses;
+      attack *= 1 + relicBonuses.allDamagePercent / 100;
       const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100;
 
@@ -743,6 +750,7 @@ export default function AdventurePage() {
   const equipBonuses = battle.equipBonuses ?? emptyEquipBonuses;
   const traitBonuses = battle.traitBonuses ?? emptyTraitBonuses;
   const advancedClassBonuses = battle.advancedClassBonuses ?? emptyAdvancedClassBonuses;
+  const relicBonuses = battle.relicBonuses ?? emptyRelicBonuses;
   const region = regions[battle.regionIndex];
   const hasAdvantage = hasElementAdvantage(equipBonuses.weaponElement, region.element);
   const monsterInfo = region.monsters[battle.killIndexInStage % region.monsters.length];
@@ -755,7 +763,8 @@ export default function AdventurePage() {
     (1 + traitBonuses.attackPercent / 100) *
     (hasAdvantage ? elementAdvantageMultiplier + advancedClassBonuses.elementAdvantageBonus : 1) *
     (battle.cheerBuffActive ? 1 + cheerBuffAttackPercent / 100 : 1) *
-    (1 + dexBonusPercent / 100);
+    (1 + dexBonusPercent / 100) *
+    (1 + relicBonuses.allDamagePercent / 100);
   const isBossReady = battle.stage >= stagesPerRegion;
 
   return (
@@ -775,6 +784,9 @@ export default function AdventurePage() {
         <div className="flex-1">
           <div className="flex items-baseline justify-between">
             <span className="font-semibold text-zinc-950 dark:text-white">
+              {battle.prestigeCount > 0 && (
+                <span className="mr-1 text-amber-500">{"⭐".repeat(Math.min(battle.prestigeCount, 5))}</span>
+              )}
               {character.progress?.equippedTitle && (
                 <span className="mr-1 text-xs font-normal text-amber-500">
                   [{character.progress.equippedTitle}]
