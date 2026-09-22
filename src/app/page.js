@@ -22,6 +22,8 @@ import { hasActiveCheerBuff } from "@/lib/cheers";
 import { cheerBuffAttackPercent } from "@/config/guild";
 import { getRemainingHiresToday, hireMercenary } from "@/lib/mercenary";
 import { mercenaryDailyLimit, getMercenaryRewardBonusPercent } from "@/config/mercenary";
+import { applyQuestDeltas } from "@/lib/quests";
+import { addGuildQuestKills } from "@/lib/guildQuest";
 import {
   merchantCheckIntervalMs,
   merchantChancePerCheck,
@@ -130,18 +132,24 @@ function applyHit(state, damage) {
     monsterMaxHp,
     monsterHp: monsterMaxHp,
     droppedItem,
+    killed: true,
   };
 }
 
-async function saveProgress(character, battle) {
+// questDeltas: 마지막 저장 이후 쌓인 퀘스트 진행량(주로 몬스터 처치 수). 저장이 자주 일어나지 않으므로
+// 새로 저장을 늘리는 대신, 이미 저장이 일어나는 시점에 슬쩍 함께 반영한다.
+async function saveProgress(character, battle, questDeltas) {
   if (!character) return;
+  const progress = character.progress ?? {};
+  const quests = questDeltas ? applyQuestDeltas(progress.quests, questDeltas) : progress.quests;
+
   await supabase
     .from("characters")
     .update({
       level: battle.level,
       progress: {
         // 가방 탭의 강화석, 성장 탭의 특성처럼, 모험 탭이 다루지 않는 값들은 그대로 보존한다.
-        ...(character.progress ?? {}),
+        ...progress,
         exp: battle.exp,
         gold: battle.gold,
         enhanceLevel: battle.enhanceLevel,
@@ -150,9 +158,14 @@ async function saveProgress(character, battle) {
         unlockedRegionIndex: battle.unlockedRegionIndex,
         // 다음에 접속했을 때 이 시각을 기준으로 방치 보상을 계산한다.
         lastActiveAt: new Date().toISOString(),
+        ...(quests ? { quests } : {}),
       },
     })
     .eq("user_id", character.user_id);
+
+  if (questDeltas?.kills) {
+    addGuildQuestKills(questDeltas.kills);
+  }
 }
 
 export default function AdventurePage() {
@@ -195,6 +208,22 @@ export default function AdventurePage() {
   const skillLastTriggeredRef = useRef({});
   const merchantRef = useRef(null);
   const goblinRef = useRef(null);
+  // 마지막 저장 이후 쌓인 몬스터 처치 수. 매번 저장하지 않고, 다음 저장 시점에 한꺼번에 반영한다.
+  const questKillsRef = useRef(0);
+  // character(state)는 effect가 등록된 시점의 값을 그대로 들고 있어서(리렌더 시 재등록되지 않는 effect의
+  // 클린업/인터벌 안에서는) 오래된 값일 수 있다. 저장할 때는 항상 이 ref로 최신 값을 읽어서,
+  // 다른 탭에서 방금 바뀐 진행도(퀘스트 등)를 되돌려쓰지 않게 한다.
+  const characterRef = useRef(character);
+
+  useEffect(() => {
+    characterRef.current = character;
+  }, [character]);
+
+  function flushQuestDeltas(extra = {}) {
+    const deltas = { kills: questKillsRef.current, ...extra };
+    questKillsRef.current = 0;
+    return deltas;
+  }
 
   // 캐릭터 정보가 도착하면, 저장되어 있던 값으로 전투 상태를 한 번만 채운다.
   // (방치 보상 계산은 로그인 시점에 AuthContext에서 이미 끝난 상태로 넘어온다)
@@ -240,6 +269,19 @@ export default function AdventurePage() {
     }
   }, [character]);
 
+  // 몬스터 처치 수(퀘스트 진행도)는 레벨업처럼 눈에 띄는 사건이 없으면 한참 저장되지 않을 수 있다.
+  // 그래서 60초마다 한 번, 쌓인 처치 수가 있을 때만 가볍게 반영한다 (매초 저장은 아님).
+  useEffect(() => {
+    if (!character || !ready) return;
+    const timer = setInterval(() => {
+      if (questKillsRef.current > 0) {
+        saveProgress(characterRef.current, battleRef.current, flushQuestDeltas()).then(() => refreshCharacter());
+      }
+    }, 60000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [character?.user_id, ready]);
+
   // 용병 목록(길드원)과 오늘 남은 용병 횟수를 한 번 불러온다.
   useEffect(() => {
     if (!character?.user_id) return;
@@ -257,6 +299,10 @@ export default function AdventurePage() {
     const next = applyHit(current, damage);
     battleRef.current = next;
     setBattle(next);
+
+    if (next.killed) {
+      questKillsRef.current += 1;
+    }
 
     const hitId = ++hitCounterRef.current;
     setFloatingNumbers((prev) => [...prev, { id: hitId, damage, isCrit, label, color }]);
@@ -312,7 +358,7 @@ export default function AdventurePage() {
     if (next.level > current.level) {
       setShowLevelUp(true);
       setTimeout(() => setShowLevelUp(false), 1500);
-      saveProgress(character, next).then(() => refreshCharacter());
+      saveProgress(characterRef.current, next, flushQuestDeltas()).then(() => refreshCharacter());
     }
   }
 
@@ -470,7 +516,7 @@ export default function AdventurePage() {
     setEventMessage(`${getGrade(merchant.item.grade).label} ${getSlot(merchant.item.slot).label}을(를) 구매했습니다!`);
     setTimeout(() => setEventMessage(null), 2500);
 
-    await saveProgress(character, next);
+    await saveProgress(characterRef.current, next, flushQuestDeltas());
     await refreshCharacter();
   }
 
@@ -491,7 +537,7 @@ export default function AdventurePage() {
     setEventMessage(`보물 고블린을 잡았다! +${formatNumber(bonusGold)}G`);
     setTimeout(() => setEventMessage(null), 2500);
 
-    saveProgress(character, next).then(() => refreshCharacter());
+    saveProgress(characterRef.current, next, flushQuestDeltas()).then(() => refreshCharacter());
   }
 
   // 화면을 나갈 때(다른 탭 이동 등) 지금까지 진행 상황을 저장하고,
@@ -499,7 +545,7 @@ export default function AdventurePage() {
   useEffect(() => {
     return () => {
       if (readyRef.current) {
-        saveProgress(character, battleRef.current).then(() => refreshCharacter());
+        saveProgress(characterRef.current, battleRef.current, flushQuestDeltas()).then(() => refreshCharacter());
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -616,7 +662,7 @@ export default function AdventurePage() {
       setSelectedMercenary(null);
     }
 
-    await saveProgress(character, next);
+    await saveProgress(characterRef.current, next, flushQuestDeltas({ regionBossClears: 1 }));
     await refreshCharacter();
     bossFightingRef.current = false;
   }

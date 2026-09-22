@@ -1,14 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useAuth } from "@/context/AuthContext";
+import { supabase } from "@/lib/supabaseClient";
+import { formatNumber } from "@/lib/format";
 import { signOut, deleteAccount } from "@/lib/nicknameAuth";
-import TabPlaceholder from "@/components/TabPlaceholder";
+import { dailyQuests, weeklyQuests, guildWeeklyQuest, dailyBonusBoxGold } from "@/config/quests";
+import { normalizeQuests, applyQuestDeltas, getCurrentWeekKey } from "@/lib/quests";
+import { fetchGuildQuestProgress, countWorldBossChallengesThisWeek } from "@/lib/guildQuest";
 
 export default function MorePage() {
+  const { character, refreshCharacter } = useAuth();
   const [confirming, setConfirming] = useState(false);
   const [password, setPassword] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
+
+  const [guildQuestProgress, setGuildQuestProgress] = useState(0);
+  const [worldBossWeeklyCount, setWorldBossWeeklyCount] = useState(0);
+  const [claimBusy, setClaimBusy] = useState(false);
+
+  useEffect(() => {
+    if (!character?.user_id) return;
+    fetchGuildQuestProgress().then((result) => setGuildQuestProgress(result.killCount));
+    countWorldBossChallengesThisWeek(character.user_id).then(setWorldBossWeeklyCount);
+  }, [character?.user_id]);
 
   function openConfirm() {
     setError("");
@@ -39,14 +55,167 @@ export default function MorePage() {
     }
   }
 
+  if (!character) {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center text-sm text-zinc-400">
+        캐릭터 정보를 불러오는 중...
+      </div>
+    );
+  }
+
+  const progress = character.progress ?? {};
+  const quests = normalizeQuests(progress.quests);
+  const dailyValues = { kills: quests.daily.kills, cheers: quests.daily.cheers, enhances: quests.daily.enhances };
+  const dailyAllDone = dailyQuests.every((q) => dailyValues[q.id] >= q.target);
+  const canClaimDailyBox = dailyAllDone && !quests.daily.boxClaimed;
+
+  const weeklyValues = {
+    worldBossChallenges: worldBossWeeklyCount,
+    regionBossClears: quests.weekly.regionBossClears,
+  };
+
+  const guildDone = guildQuestProgress >= guildWeeklyQuest.target;
+  const guildAlreadyClaimed = quests.guildWeeklyClaimedWeekKey === getCurrentWeekKey();
+  const canClaimGuildReward = guildDone && !guildAlreadyClaimed;
+
+  async function updateProgress(updater) {
+    setClaimBusy(true);
+    await supabase
+      .from("characters")
+      .update({ progress: updater(progress) })
+      .eq("user_id", character.user_id);
+    await refreshCharacter();
+    setClaimBusy(false);
+  }
+
+  async function claimDailyBox() {
+    if (claimBusy || !canClaimDailyBox) return;
+    await updateProgress((p) => ({
+      ...p,
+      gold: (p.gold ?? 0) + dailyBonusBoxGold,
+      quests: applyQuestDeltas(p.quests, { dailyBoxClaimed: true }),
+    }));
+  }
+
+  async function claimWeeklyQuest(quest) {
+    const value = weeklyValues[quest.id];
+    const alreadyClaimed = quests.weekly.claimedIds.includes(quest.id);
+    if (claimBusy || value < quest.target || alreadyClaimed) return;
+    await updateProgress((p) => ({
+      ...p,
+      gold: (p.gold ?? 0) + quest.rewardGold,
+      quests: applyQuestDeltas(p.quests, { weeklyClaimId: quest.id }),
+    }));
+  }
+
+  async function claimGuildReward() {
+    if (claimBusy || !canClaimGuildReward) return;
+    await updateProgress((p) => ({
+      ...p,
+      gold: (p.gold ?? 0) + guildWeeklyQuest.rewardGold,
+      quests: applyQuestDeltas(p.quests, { guildWeeklyClaimedWeekKey: getCurrentWeekKey() }),
+    }));
+  }
+
   return (
-    <div>
-      <TabPlaceholder
-        emoji="☰"
-        title="더보기"
-        description="여기에 퀘스트, 도감, 업적, 칭호, 연대기, 설정이 표시될 예정입니다."
-      />
-      <div className="flex flex-col gap-3 px-6">
+    <div className="flex flex-col gap-4 px-6 py-8">
+      <h1 className="text-lg font-bold text-zinc-950 dark:text-white">퀘스트</h1>
+
+      <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+        <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">일일 퀘스트</h2>
+        <div className="mt-2 flex flex-col gap-2">
+          {dailyQuests.map((q) => {
+            const value = dailyValues[q.id];
+            const done = value >= q.target;
+            return (
+              <div
+                key={q.id}
+                className="flex items-center justify-between rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900"
+              >
+                <span className={done ? "text-emerald-500" : "text-zinc-950 dark:text-white"}>
+                  {q.icon} {q.label} {done && "✓"}
+                </span>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                  {formatNumber(Math.min(value, q.target))}/{formatNumber(q.target)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={claimDailyBox}
+          disabled={claimBusy || !canClaimDailyBox}
+          className="mt-3 w-full rounded-lg bg-amber-500 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+        >
+          {quests.daily.boxClaimed
+            ? "오늘 보너스 상자 수령 완료"
+            : `보너스 상자 수령하기 (+${formatNumber(dailyBonusBoxGold)}G)`}
+        </button>
+      </div>
+
+      <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+        <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">주간 퀘스트</h2>
+        <div className="mt-2 flex flex-col gap-2">
+          {weeklyQuests.map((q) => {
+            const value = weeklyValues[q.id];
+            const done = value >= q.target;
+            const claimed = quests.weekly.claimedIds.includes(q.id);
+            return (
+              <div key={q.id} className="rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
+                <div className="flex items-center justify-between">
+                  <span className={done ? "text-emerald-500" : "text-zinc-950 dark:text-white"}>
+                    {q.icon} {q.label}
+                  </span>
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                    {formatNumber(Math.min(value, q.target))}/{formatNumber(q.target)}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => claimWeeklyQuest(q)}
+                  disabled={claimBusy || !done || claimed}
+                  className="mt-1.5 w-full rounded-lg border border-amber-400 py-1.5 text-xs font-medium text-amber-600 disabled:opacity-40 dark:text-amber-400"
+                >
+                  {claimed ? "수령 완료" : `보상 받기 (+${formatNumber(q.rewardGold)}G)`}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+        <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">길드 공동 퀘스트</h2>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          길드원 전체의 진행도를 합산합니다. 매주 초기화돼요.
+        </p>
+        <div className="mt-2 rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
+          <div className="flex items-center justify-between">
+            <span className={guildDone ? "text-emerald-500" : "text-zinc-950 dark:text-white"}>
+              {guildWeeklyQuest.icon} {guildWeeklyQuest.label}
+            </span>
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              {formatNumber(Math.min(guildQuestProgress, guildWeeklyQuest.target))}/
+              {formatNumber(guildWeeklyQuest.target)}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={claimGuildReward}
+            disabled={claimBusy || !canClaimGuildReward}
+            className="mt-1.5 w-full rounded-lg border border-amber-400 py-1.5 text-xs font-medium text-amber-600 disabled:opacity-40 dark:text-amber-400"
+          >
+            {guildAlreadyClaimed ? "수령 완료" : `보상 받기 (+${formatNumber(guildWeeklyQuest.rewardGold)}G)`}
+          </button>
+        </div>
+      </div>
+
+      <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
+        도감, 업적, 칭호, 연대기, 설정은 다음 단계들에서 추가될 예정입니다.
+      </p>
+
+      <div className="flex flex-col gap-3">
         <button
           type="button"
           onClick={() => signOut()}

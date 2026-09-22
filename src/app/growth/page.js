@@ -28,6 +28,7 @@ import {
   getEnhanceTotalCost,
   enhanceBatchOptions,
 } from "@/config/balance";
+import { applyQuestDeltas } from "@/lib/quests";
 
 export default function GrowthPage() {
   const { character, refreshCharacter } = useAuth();
@@ -92,6 +93,7 @@ export default function GrowthPage() {
           ...progress,
           gold: gold - totalCost,
           enhanceLevel: enhanceLevel + count,
+          quests: applyQuestDeltas(progress.quests, { enhances: 1 }),
         },
       })
       .eq("user_id", character.user_id);

@@ -108,6 +108,31 @@ export default function BagPage() {
     await refreshCharacter();
   }
 
+  async function handleAutoEquip() {
+    setBusy(true);
+    const bestBySlot = {};
+    for (const item of items) {
+      const current = bestBySlot[item.slot];
+      const score = getGradeIndex(item.grade) * 100 + (item.enhance_level ?? 0);
+      const currentScore = current ? getGradeIndex(current.grade) * 100 + (current.enhance_level ?? 0) : -1;
+      if (score > currentScore) bestBySlot[item.slot] = item;
+    }
+
+    const toEquip = Object.values(bestBySlot).filter((item) => !item.equipped);
+    for (const item of toEquip) {
+      await supabase
+        .from("equipment")
+        .update({ equipped: false })
+        .eq("user_id", character.user_id)
+        .eq("slot", item.slot)
+        .eq("equipped", true);
+      await supabase.from("equipment").update({ equipped: true }).eq("id", item.id);
+    }
+
+    await loadItems(character.user_id);
+    setBusy(false);
+  }
+
   async function handleEquip(item) {
     setBusy(true);
     if (!item.equipped) {
@@ -196,7 +221,17 @@ export default function BagPage() {
 
       {/* 장착 중인 장비 (부위 6칸) */}
       <div>
-        <h2 className="mb-2 text-sm font-semibold text-zinc-950 dark:text-white">장착 중</h2>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">장착 중</h2>
+          <button
+            type="button"
+            onClick={handleAutoEquip}
+            disabled={busy}
+            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-600 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+          >
+            ⚡ 자동 장착
+          </button>
+        </div>
         <div className="grid grid-cols-3 gap-2">
           {equipmentSlots.map((slot) => {
             const item = equippedBySlot[slot.id];

@@ -22,6 +22,7 @@ import { getWorldBossLord, worldBossDailyChallengeLimit } from "@/config/worldBo
 import { getElement } from "@/config/elements";
 import { getGrade } from "@/config/equipment";
 import { regions } from "@/config/regions";
+import { applyQuestDeltas } from "@/lib/quests";
 
 const reactionEmojis = ["👏", "😂", "😭", "🔥"];
 const NEWS_LIMIT = 30;
@@ -184,6 +185,7 @@ export default function GuildPage() {
           progress: {
             ...progress,
             guildContribution: (progress.guildContribution ?? 0) + cheerContributionReward,
+            quests: applyQuestDeltas(progress.quests, { cheers: 1 }),
           },
         })
         .eq("user_id", character.user_id);
