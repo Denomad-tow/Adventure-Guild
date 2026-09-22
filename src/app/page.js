@@ -172,11 +172,19 @@ export default function AdventurePage() {
         unlockedRegionIndex: progress.unlockedRegionIndex ?? 0,
       };
 
-      fetchEquippedBonuses(character.user_id).then((equipBonuses) => {
-        const state = { ...loaded, equipBonuses, ...initialMonsterState(regionIndex, stage) };
-        battleRef.current = state;
-        setBattle(state);
-      });
+      // 장비 보너스를 불러오다 문제가 생기더라도, 레벨/골드 같은 진짜 캐릭터 정보는
+      // 반드시 화면에 반영되어야 하므로 실패 시에도 보너스 0으로 계속 진행한다.
+      fetchEquippedBonuses(character.user_id)
+        .catch(() => emptyEquipBonuses)
+        .then((equipBonuses) => {
+          const state = {
+            ...loaded,
+            equipBonuses: equipBonuses ?? emptyEquipBonuses,
+            ...initialMonsterState(regionIndex, stage),
+          };
+          battleRef.current = state;
+          setBattle(state);
+        });
     }
   }, [character]);
 

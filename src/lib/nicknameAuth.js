@@ -1,4 +1,5 @@
 import { supabase } from "./supabaseClient";
+import { createSessionId, setMySessionId } from "./sessionGuard";
 
 // Supabase 로그인은 이메일이 필요하지만, 이 게임은 닉네임으로 가입/로그인한다.
 // 그래서 닉네임을 화면에 보이지 않는 내부용 가짜 이메일로 바꿔서 사용한다.
@@ -33,24 +34,40 @@ export async function signUpWithNickname({ nickname, password, jobId }) {
     return { error: toFriendlyError(error) };
   }
 
+  const sessionId = createSessionId();
   const { error: insertError } = await supabase.from("characters").insert({
     user_id: data.user.id,
     nickname: nickname.trim(),
     job: jobId,
+    active_session_id: sessionId,
   });
   if (insertError) {
     return { error: "캐릭터 저장에 실패했습니다. 다시 시도해주세요." };
   }
+  setMySessionId(sessionId);
 
   return { error: null };
 }
 
 export async function signInWithNickname({ nickname, password }) {
   const email = nicknameToEmail(nickname);
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
     return { error: toFriendlyError(error) };
   }
+
+  // 로그인할 때마다 새 "내 세션 표시"를 만들어 서버에 남긴다.
+  // 다른 곳에서 로그인하면 이 값이 다시 바뀌어서, 예전 위치는 자신이 밀려난 걸 알 수 있다.
+  const sessionId = createSessionId();
+  setMySessionId(sessionId);
+  const { error: sessionError } = await supabase
+    .from("characters")
+    .update({ active_session_id: sessionId })
+    .eq("user_id", data.user.id);
+  if (sessionError) {
+    console.error("세션 표시 저장 실패:", sessionError.message);
+  }
+
   return { error: null };
 }
 

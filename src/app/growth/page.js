@@ -30,7 +30,9 @@ export default function GrowthPage() {
 
   useEffect(() => {
     if (character?.user_id) {
-      fetchEquippedBonuses(character.user_id).then((bonuses) => setEquipAttackBonus(bonuses.attackFlat));
+      fetchEquippedBonuses(character.user_id)
+        .then((bonuses) => setEquipAttackBonus(bonuses.attackFlat))
+        .catch(() => setEquipAttackBonus(0));
     }
   }, [character?.user_id]);
 
