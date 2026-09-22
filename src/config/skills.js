@@ -33,8 +33,9 @@ export const skillLevelBonusPerPoint = 0.05;
 export const skillEnhanceFailureStartLevel = 10;
 const skillEnhanceSuccessRates = [0.8, 0.7, 0.6, 0.5, 0.45, 0.4, 0.35, 0.3, 0.25, 0.2];
 
+// 예전엔 선형(3 + 레벨×2)이라 고레벨에서도 계속 저렴했다. 초반은 비슷하되 후반은 확실히 비싸지도록 지수 증가로 바꿨다.
 export function getSkillEnhanceCost(currentLevel) {
-  return 3 + currentLevel * 2;
+  return Math.round(4 * Math.pow(1.2, currentLevel));
 }
 
 export function getSkillMultiplier(skill, level) {

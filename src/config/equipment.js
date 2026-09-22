@@ -1,5 +1,6 @@
 // 장비 관련 모든 수치를 모아두는 곳. 여기 값만 고치면 드랍률/옵션 세기가 바뀐다.
 import { rollRandomElement } from "@/config/elements";
+import { rollUniqueEffect } from "@/config/uniqueEffects";
 
 // 지역마다 테마가 있는 장비 세트 하나씩. 같은 세트를 2개/4개 장착하면 보너스가 붙는다.
 // id는 regions.js의 지역 id와 맞춰서, 그 지역에서 나온 장비가 이 세트로 표시된다.
@@ -33,6 +34,18 @@ export const equipmentSets = [
     name: "서리 사냥꾼 세트",
     bonus2: { critRate: 5 },
     bonus4: { attackFlat: 35 },
+  },
+  {
+    id: "sky",
+    name: "천공 기사 세트",
+    bonus2: { critRate: 7 },
+    bonus4: { attackFlat: 45 },
+  },
+  {
+    id: "rift",
+    name: "균열 수호자 세트",
+    bonus2: { critDamage: 20 },
+    bonus4: { attackFlat: 55 },
   },
 ];
 
@@ -227,6 +240,11 @@ function rollOptions(gradeId) {
 // 몬스터를 잡았을 때 장비가 나올지, 나온다면 어떤 장비인지 결정한다.
 // setId는 어느 지역에서 잡았는지로 정해진다 (그 지역 테마의 장비 세트로 표시됨).
 // bonusDropChance는 행운 특성 등으로 늘어난 드랍 확률(%포인트)이다.
+// 전설/신화 등급만 고유 효과를 하나씩 가진다.
+function rollUniqueEffectForGrade(gradeId) {
+  return gradeId === "legendary" || gradeId === "mythic" ? rollUniqueEffect() : null;
+}
+
 export function rollEquipmentDrop(setId, bonusDropChance = 0) {
   if (Math.random() >= equipDropChance + bonusDropChance / 100) return null;
   const slot = equipmentSlots[Math.floor(Math.random() * equipmentSlots.length)].id;
@@ -235,7 +253,8 @@ export function rollEquipmentDrop(setId, bonusDropChance = 0) {
   // 무기는 속성을 하나씩 지니고 있어서, 지역 속성에 맞춰 무기를 바꿔 낄 수 있다.
   const element = slot === "weapon" ? rollRandomElement() : null;
   const itemType = rollItemType(slot);
-  return { slot, grade, options, setId: setId ?? null, element, itemType };
+  const uniqueEffect = rollUniqueEffectForGrade(grade);
+  return { slot, grade, options, setId: setId ?? null, element, itemType, uniqueEffect };
 }
 
 export function getDisassembleReward(gradeId) {
@@ -264,7 +283,8 @@ export function rollMerchantItem(minGradeId = "rare") {
   const options = rollOptions(grade);
   const element = slot === "weapon" ? rollRandomElement() : null;
   const itemType = rollItemType(slot);
-  return { slot, grade, options, setId: null, element, itemType };
+  const uniqueEffect = rollUniqueEffectForGrade(grade);
+  return { slot, grade, options, setId: null, element, itemType, uniqueEffect };
 }
 
 export function getMerchantPrice(gradeId, priceMultiplier) {
@@ -308,6 +328,11 @@ export function getEquipmentStatBonuses(equippedItems) {
 export function getEquippedWeaponElement(equippedItems) {
   const weapon = equippedItems.find((item) => item.slot === "weapon");
   return weapon?.element ?? null;
+}
+
+// 장착 중인 전설+ 장비들의 고유 효과 id 목록 (여러 개 장착하면 전부 함께 적용된다).
+export function getEquippedUniqueEffects(equippedItems) {
+  return equippedItems.map((item) => item.unique_effect).filter(Boolean);
 }
 
 // 지금 장착 중인 장비들 기준으로, 어떤 세트가 몇 개 모였고 보너스가 켜졌는지 알려준다. (가방 탭 표시용)

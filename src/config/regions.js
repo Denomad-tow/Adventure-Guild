@@ -70,4 +70,32 @@ export const regions = [
     boss: { name: "아이스 드래곤", emoji: "🐉" },
     clearStory: "아이스 드래곤을 쓰러뜨렸다. 성채 너머 하늘에 떠 있는 섬이 어렴풋이 보인다.",
   },
+  {
+    id: "sky",
+    name: "하늘 섬",
+    element: "빛",
+    monsters: [
+      { name: "그리폰", emoji: "🦅" },
+      { name: "천공 기사", emoji: "🛡️" },
+      { name: "바람 정령", emoji: "🌬️" },
+      { name: "구름 양", emoji: "☁️" },
+      { name: "천마", emoji: "🦄" },
+    ],
+    boss: { name: "폭풍의 그리폰 왕", emoji: "🦅" },
+    clearStory: "폭풍의 그리폰 왕이 하늘 저편으로 흩어지자, 구름 사이로 검게 갈라진 틈이 드러났다.",
+  },
+  {
+    id: "rift",
+    name: "균열의 심연",
+    element: "어둠",
+    monsters: [
+      { name: "균열 촉수", emoji: "🐙" },
+      { name: "그림자 처럼", emoji: "👤" },
+      { name: "균열 눈동자", emoji: "👁️" },
+      { name: "공허 조각", emoji: "🕳️" },
+      { name: "균열 수호자", emoji: "⚔️" },
+    ],
+    boss: { name: "균열의 파수꾼", emoji: "👁️‍🗨️" },
+    clearStory: "균열의 파수꾼을 물리쳤지만, 그 너머엔 아직 더 깊은 어둠이 남아있는 듯하다. (이야기는 계속됩니다)",
+  },
 ];

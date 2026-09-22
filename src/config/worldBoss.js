@@ -1,5 +1,4 @@
-// 월드 보스(일곱 균열의 군주) 관련 수치. 지금은 첫 두 군주만 등장하고, 이후 계속 번갈아 나온다.
-// (나머지 다섯 군주는 5단계에서 추가된다)
+// 월드 보스(일곱 균열의 군주) 관련 수치. 일곱 군주를 한 바퀴 돌면 처음(탐욕의 군주)부터 다시 등장한다.
 
 export const worldBossLords = [
   {
@@ -8,6 +7,8 @@ export const worldBossLords = [
     emoji: "👑",
     weakness: "빛",
     rule: "골드를 많이 가진 사람이 더 큰 피해를 줍니다.",
+    story:
+      "탐욕의 군주가 무너지며 쌓아뒀던 금화가 쏟아졌다. 길드원들은 승리의 기쁨보다 금화 줍기에 더 바빴다.",
   },
   {
     id: "frost",
@@ -15,6 +16,47 @@ export const worldBossLords = [
     emoji: "❄️",
     weakness: "불",
     rule: "공격 속도가 느려지는 저주에 걸립니다.",
+    story: "서리의 군주가 얼어붙어 산산조각났다. 오랫동안 얼어있던 대지에 다시 볕이 들기 시작했다.",
+  },
+  {
+    id: "plague",
+    name: "역병의 군주",
+    emoji: "🦠",
+    weakness: "불",
+    rule: "성직자의 피해가 2배가 됩니다.",
+    story: "성직자들의 빛이 역병의 군주를 정화했다. 균열 너머로 오랜만에 맑은 공기가 흘러들었다.",
+  },
+  {
+    id: "steel",
+    name: "강철의 군주",
+    emoji: "🛡️",
+    weakness: "물",
+    rule: "치명타만 제대로 들어갑니다.",
+    story: "강철 갑주에 금이 가더니 이내 산산이 부서졌다. 정확한 일격만이 그를 무너뜨릴 수 있었다.",
+  },
+  {
+    id: "illusion",
+    name: "환영의 군주",
+    emoji: "🌀",
+    weakness: "어둠",
+    rule: "도전할 때마다 약점 속성이 랜덤으로 바뀝니다.",
+    story: "수많은 환영이 흩어지고 나서야 진짜 군주가 드러났다. 길드원들은 어느 쪽이 진짜인지 끝까지 헷갈렸다.",
+  },
+  {
+    id: "storm",
+    name: "폭풍의 군주",
+    emoji: "🌪️",
+    weakness: "자연",
+    rule: "같은 시간대에 함께 도전한 길드원이 많을수록 피해가 늘어납니다.",
+    story: "여럿이 동시에 몰아친 공격에 폭풍의 군주가 흩어졌다. 혼자였다면 어림도 없었을 것이다.",
+  },
+  {
+    id: "riftking",
+    name: "균열의 왕",
+    emoji: "👁️",
+    weakness: null,
+    rule: "앞선 여섯 군주의 힘을 모두 섞어 씁니다. 약점 속성이 없습니다.",
+    story: "균열의 왕이 무너지자 하늘의 균열들도 서서히 닫히기 시작했다. 그러나 이야기는 여기서 끝나지 않았다.",
   },
 ];
 
@@ -47,6 +89,20 @@ export const worldBossGreedGoldBonusCapPercent = 100;
 
 // 서리의 군주: 공격 속도가 느려지는 저주 → 실질 피해량 -30%
 export const worldBossFrostCursePenaltyPercent = 30;
+
+// 역병의 군주: 성직자 피해 2배
+export const worldBossPlaguePriestMultiplier = 2;
+
+// 환영의 군주: 도전할 때마다 이 목록 중 하나가 랜덤으로 약점이 된다
+export const worldBossIllusionElements = ["자연", "어둠", "물", "불", "빛"];
+
+// 폭풍의 군주: 최근 이 시간(분) 안에 도전한 서로 다른 길드원 수 × 이 값(%)만큼 피해 증가
+export const worldBossStormWindowMinutes = 10;
+export const worldBossStormBonusPerChallengerPercent = 15;
+
+export function rollIllusionWeakness() {
+  return worldBossIllusionElements[Math.floor(Math.random() * worldBossIllusionElements.length)];
+}
 
 export function getWorldBossLord(lordIndex) {
   const cycle = Math.floor(lordIndex / worldBossLords.length);

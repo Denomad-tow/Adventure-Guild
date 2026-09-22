@@ -49,6 +49,7 @@ export default function GrowthPage() {
   const [equipAttackBonus, setEquipAttackBonus] = useState(0);
   const [traitBusy, setTraitBusy] = useState(false);
   const [skillBusyId, setSkillBusyId] = useState(null);
+  const [skillCount, setSkillCount] = useState(enhanceBatchOptions[0]);
   const [skillEnhanceResult, setSkillEnhanceResult] = useState(null);
   const [advancedClassBusy, setAdvancedClassBusy] = useState(false);
   const [prestigeBusy, setPrestigeBusy] = useState(false);
@@ -142,28 +143,42 @@ export default function GrowthPage() {
     setTraitBusy(false);
   }
 
-  async function handleEnhanceSkill(skillId) {
-    const currentLevel = skillLevels[skillId] ?? 0;
-    const cost = getSkillEnhanceCost(currentLevel);
-    if (skillBusyId || currentLevel >= maxSkillLevel || stones < cost) return;
+  async function handleEnhanceSkill(skillId, count) {
+    if (skillBusyId) return;
+    let level = skillLevels[skillId] ?? 0;
+    let stonesLeft = stones;
+    let successCount = 0;
+    let attempts = 0;
+
+    for (let i = 0; i < count; i += 1) {
+      const cost = getSkillEnhanceCost(level);
+      if (level >= maxSkillLevel || stonesLeft < cost) break;
+      stonesLeft -= cost;
+      attempts += 1;
+      if (rollSkillEnhanceSuccess(level)) {
+        level += 1;
+        successCount += 1;
+      }
+    }
+
+    if (attempts === 0) return;
     setSkillBusyId(skillId);
     setSkillEnhanceResult(null);
-
-    const success = rollSkillEnhanceSuccess(currentLevel);
-    const nextSkillLevels = success
-      ? { ...skillLevels, [skillId]: currentLevel + 1 }
-      : skillLevels;
 
     await supabase
       .from("characters")
       .update({
-        progress: { ...progress, enhancementStones: stones - cost, skillLevels: nextSkillLevels },
+        progress: {
+          ...progress,
+          enhancementStones: stonesLeft,
+          skillLevels: { ...skillLevels, [skillId]: level },
+        },
       })
       .eq("user_id", character.user_id);
     await refreshCharacter();
     setSkillBusyId(null);
-    setSkillEnhanceResult({ skillId, success });
-    setTimeout(() => setSkillEnhanceResult(null), 2000);
+    setSkillEnhanceResult({ skillId, attempts, successCount });
+    setTimeout(() => setSkillEnhanceResult(null), 2500);
   }
 
   async function handleChooseAdvancedClass(classId) {
@@ -340,6 +355,22 @@ export default function GrowthPage() {
           <span>보유 강화석</span>
           <span className="font-semibold text-zinc-950 dark:text-white">🔩 {formatNumber(stones)}</span>
         </p>
+        <div className="mt-3 flex rounded-lg bg-zinc-100 p-1 dark:bg-zinc-900">
+          {enhanceBatchOptions.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setSkillCount(option)}
+              className={`flex-1 rounded-md py-1.5 text-xs font-medium ${
+                skillCount === option
+                  ? "bg-white text-zinc-950 shadow dark:bg-zinc-800 dark:text-white"
+                  : "text-zinc-500"
+              }`}
+            >
+              {option}강화
+            </button>
+          ))}
+        </div>
         <div className="mt-3 flex flex-col gap-2">
           {skills.map((skill) => {
             const level = skillLevels[skill.id] ?? 0;
@@ -365,19 +396,15 @@ export default function GrowthPage() {
                 )}
                 <button
                   type="button"
-                  onClick={() => handleEnhanceSkill(skill.id)}
+                  onClick={() => handleEnhanceSkill(skill.id, skillCount)}
                   disabled={skillBusyId === skill.id || isMax || stones < cost}
                   className="mt-2 w-full rounded-lg border border-zinc-300 py-1.5 text-xs font-medium text-zinc-700 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
                 >
-                  {isMax ? "최대 강화" : `강화하기 (🔩${cost})`}
+                  {isMax ? "최대 강화" : `${skillCount}강화하기 (🔩${cost}~)`}
                 </button>
                 {result && (
-                  <p
-                    className={`mt-1 text-center text-xs font-semibold ${
-                      result.success ? "text-emerald-500" : "text-red-500"
-                    }`}
-                  >
-                    {result.success ? "강화 성공!" : "강화 실패... 강화석만 소모되었습니다."}
+                  <p className="mt-1 text-center text-xs font-semibold text-emerald-500">
+                    {result.attempts}회 시도 · {result.successCount}회 성공
                   </p>
                 )}
               </div>
@@ -427,6 +454,14 @@ export default function GrowthPage() {
                       className="rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
                     >
                       +10
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAddTraitPoint(branch.id, 100)}
+                      disabled={traitBusy || availableTraitPoints <= 0}
+                      className="rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+                    >
+                      +100
                     </button>
                   </div>
                 </div>

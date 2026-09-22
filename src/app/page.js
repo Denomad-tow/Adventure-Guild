@@ -32,6 +32,9 @@ import { fetchGuildTownBonuses } from "@/lib/guildTown";
 import { emptyGuildTownBonuses } from "@/config/guildTown";
 import { getAdvancedClassBonuses, emptyAdvancedClassBonuses } from "@/config/advancedClasses";
 import { getRelicBonuses, emptyRelicBonuses } from "@/lib/prestige";
+import { fetchPets, getActivePetBonuses, emptyPetBonuses } from "@/lib/pets";
+import { eggDropChance, rollPetSpecies, eggHatchHours } from "@/config/pets";
+import { getUniqueEffect, emptyUniqueEffectBonuses } from "@/config/uniqueEffects";
 import {
   merchantCheckIntervalMs,
   merchantChancePerCheck,
@@ -57,7 +60,35 @@ import {
   eliteMultiplier,
 } from "@/config/balance";
 
-const emptyEquipBonuses = { attackFlat: 0, critRate: 0, critDamage: 0, goldFind: 0, weaponElement: null };
+const emptyEquipBonuses = {
+  attackFlat: 0,
+  critRate: 0,
+  critDamage: 0,
+  goldFind: 0,
+  weaponElement: null,
+  uniqueEffects: [],
+  uniqueEffectBonuses: emptyUniqueEffectBonuses,
+};
+
+// 공격 한 번에 대해, 장착한 전설+ 장비의 "확률 발동" 고유 효과를 굴려서 추가 타격을 만들어낸다.
+function getProcHits(equipBonuses, attack, baseDamage, isCrit) {
+  const hits = [];
+  for (const effectId of equipBonuses.uniqueEffects ?? []) {
+    const effect = getUniqueEffect(effectId);
+    if (!effect || effect.type !== "proc" || Math.random() >= effect.procChance) continue;
+    if (effect.id === "lightning_strike") {
+      hits.push({
+        damage: Math.round(attack * effect.procDamageMultiplier),
+        isCrit: false,
+        label: "⚡번개",
+        color: "#facc15",
+      });
+    } else if (effect.id === "double_strike") {
+      hits.push({ damage: baseDamage, isCrit, label: "연속" });
+    }
+  }
+  return hits;
+}
 const emptyTraitBonuses = { attackPercent: 0, attackSpeedPercent: 0, goldFindPercent: 0, dropChancePercent: 0 };
 
 function initialMonsterState(regionIndex, stage) {
@@ -99,17 +130,26 @@ function applyHit(state, damage) {
   const traitBonuses = state.traitBonuses ?? emptyTraitBonuses;
   const guildBonuses = state.guildBonuses ?? emptyGuildTownBonuses;
   const advancedClassBonuses = state.advancedClassBonuses ?? emptyAdvancedClassBonuses;
+  const petBonuses = state.petBonuses ?? emptyPetBonuses;
+  const uniqueEffectBonuses = equipBonuses.uniqueEffectBonuses ?? emptyUniqueEffectBonuses;
   const goldMultiplier =
     1 +
     (equipBonuses.goldFind +
       traitBonuses.goldFindPercent +
       guildBonuses.treasuryGoldBonusPercent +
-      advancedClassBonuses.goldFindPercent) /
+      advancedClassBonuses.goldFindPercent +
+      petBonuses.goldFindPercent +
+      uniqueEffectBonuses.goldFindPercent) /
       100;
-  const expMultiplier = 1 + guildBonuses.trainingExpBonusPercent / 100;
+  const expMultiplier =
+    1 + (guildBonuses.trainingExpBonusPercent + petBonuses.expPercent + uniqueEffectBonuses.expPercent) / 100;
   const gold = state.gold + Math.round(reward.gold * goldMultiplier);
   let exp = state.exp + Math.round(reward.exp * expMultiplier);
-  const droppedItem = rollEquipmentDrop(regions[state.regionIndex]?.id, traitBonuses.dropChancePercent);
+  const droppedItem = rollEquipmentDrop(
+    regions[state.regionIndex]?.id,
+    traitBonuses.dropChancePercent + petBonuses.dropChancePercent
+  );
+  const droppedEgg = Math.random() < eggDropChance ? rollPetSpecies() : null;
 
   let expToNext = getExpToNextLevel(level);
   while (exp >= expToNext) {
@@ -149,6 +189,7 @@ function applyHit(state, damage) {
     monsterMaxHp,
     monsterHp: monsterMaxHp,
     droppedItem,
+    droppedEgg,
     killed: true,
   };
 }
@@ -304,12 +345,14 @@ export default function AdventurePage() {
         fetchEquippedBonuses(character.user_id).catch(() => emptyEquipBonuses),
         hasActiveCheerBuff(character.user_id).catch(() => false),
         fetchGuildTownBonuses().catch(() => emptyGuildTownBonuses),
-      ]).then(([equipBonuses, cheerBuffActive, guildBonuses]) => {
+        fetchPets(character.user_id).catch(() => []),
+      ]).then(([equipBonuses, cheerBuffActive, guildBonuses, pets]) => {
           const state = {
             ...loaded,
             equipBonuses: equipBonuses ?? emptyEquipBonuses,
             cheerBuffActive,
             guildBonuses: guildBonuses ?? emptyGuildTownBonuses,
+            petBonuses: getActivePetBonuses(pets),
             ...initialMonsterState(regionIndex, stage),
           };
           battleRef.current = state;
@@ -388,6 +431,7 @@ export default function AdventurePage() {
           set_id: drop.setId,
           element: drop.element,
           item_type: drop.itemType,
+          unique_effect: drop.uniqueEffect,
         })
         .then(({ error }) => {
           if (error) {
@@ -405,9 +449,29 @@ export default function AdventurePage() {
             postGuildNews(
               character.user_id,
               character.nickname,
-              `${character.nickname}님이 ${gradeLabel} 장비 [${itemLabel}]을 획득했습니다!`
+              `${character.nickname}님이 ${gradeLabel} 장비 [${itemLabel}]을 획득했습니다!`,
+              "legendary_drop"
             );
           }
+        });
+    }
+
+    if (next.droppedEgg) {
+      supabase
+        .from("pets")
+        .insert({
+          user_id: character.user_id,
+          species_id: next.droppedEgg,
+          is_egg: true,
+          hatch_at: new Date(Date.now() + eggHatchHours * 3600 * 1000).toISOString(),
+        })
+        .then(({ error }) => {
+          if (error) {
+            console.error("알 저장 실패:", error.message);
+            return;
+          }
+          setEventMessage("🥚 알을 발견했습니다! 가방 탭에서 확인해보세요.");
+          setTimeout(() => setEventMessage(null), 2500);
         });
     }
 
@@ -433,25 +497,30 @@ export default function AdventurePage() {
       if (bossFightingRef.current) return;
       const current = battleRef.current;
       const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
+      const ueb = equipBonuses.uniqueEffectBonuses ?? emptyUniqueEffectBonuses;
       const tb = current.traitBonuses ?? emptyTraitBonuses;
       const acb = current.advancedClassBonuses ?? emptyAdvancedClassBonuses;
       const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
       let attack = baseAttack * (1 + tb.attackPercent / 100);
       const region = regions[current.regionIndex];
       if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
-        attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus;
+        attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus + ueb.elementAdvantageBonus;
       }
       if (current.cheerBuffActive) {
         attack *= 1 + cheerBuffAttackPercent / 100;
       }
       attack *= 1 + getDexAttackBonusPercent(current) / 100;
       const relicBonuses = current.relicBonuses ?? emptyRelicBonuses;
-      attack *= 1 + relicBonuses.allDamagePercent / 100;
-      const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100;
-      const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100;
+      const petBonuses = current.petBonuses ?? emptyPetBonuses;
+      attack *= 1 + (relicBonuses.allDamagePercent + petBonuses.attackPercent) / 100;
+      const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100 + ueb.critRate / 100;
+      const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100 + petBonuses.critDamagePercent / 100;
       const isCrit = Math.random() < critRate;
       const damage = Math.round(attack * (isCrit ? critDamage : 1));
       processHit({ damage, isCrit });
+      for (const procHit of getProcHits(equipBonuses, attack, damage, isCrit)) {
+        processHit(procHit);
+      }
     }, intervalMs);
 
     return () => clearInterval(timer);
@@ -474,22 +543,24 @@ export default function AdventurePage() {
       const current = battleRef.current;
       const stats = jobBattleStats[character.job] ?? jobBattleStats.warrior;
       const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
+      const ueb = equipBonuses.uniqueEffectBonuses ?? emptyUniqueEffectBonuses;
       const tb = current.traitBonuses ?? emptyTraitBonuses;
       const acb = current.advancedClassBonuses ?? emptyAdvancedClassBonuses;
       const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
       let attack = baseAttack * (1 + tb.attackPercent / 100);
       const region = regions[current.regionIndex];
       if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
-        attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus;
+        attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus + ueb.elementAdvantageBonus;
       }
       if (current.cheerBuffActive) {
         attack *= 1 + cheerBuffAttackPercent / 100;
       }
       attack *= 1 + getDexAttackBonusPercent(current) / 100;
       const relicBonuses = current.relicBonuses ?? emptyRelicBonuses;
-      attack *= 1 + relicBonuses.allDamagePercent / 100;
-      const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100;
-      const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100;
+      const petBonuses = current.petBonuses ?? emptyPetBonuses;
+      attack *= 1 + (relicBonuses.allDamagePercent + petBonuses.attackPercent) / 100;
+      const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100 + ueb.critRate / 100;
+      const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100 + petBonuses.critDamagePercent / 100;
 
       const now = Date.now();
       for (const skill of skills) {
@@ -503,6 +574,9 @@ export default function AdventurePage() {
           const isCrit = Math.random() < critRate;
           const damage = Math.round(attack * multiplier * (isCrit ? critDamage : 1));
           processHit({ damage, isCrit, label: skill.name, color: "#a855f7" });
+          for (const procHit of getProcHits(equipBonuses, attack, damage, isCrit)) {
+            processHit(procHit);
+          }
         }
       }
     }, 250);
@@ -571,6 +645,7 @@ export default function AdventurePage() {
       set_id: merchant.item.setId,
       element: merchant.item.element,
       item_type: merchant.item.itemType,
+      unique_effect: merchant.item.uniqueEffect,
     });
     if (error) {
       console.error("상인 장비 구매 실패:", error.message);
@@ -723,7 +798,8 @@ export default function AdventurePage() {
       postGuildNews(
         character.user_id,
         character.nickname,
-        `${character.nickname}님이 ${regions[nextRegionIndex].name}을 개척했습니다!`
+        `${character.nickname}님이 ${regions[nextRegionIndex].name}을 개척했습니다!`,
+        "region_clear"
       );
     }
 
@@ -751,6 +827,8 @@ export default function AdventurePage() {
   const traitBonuses = battle.traitBonuses ?? emptyTraitBonuses;
   const advancedClassBonuses = battle.advancedClassBonuses ?? emptyAdvancedClassBonuses;
   const relicBonuses = battle.relicBonuses ?? emptyRelicBonuses;
+  const petBonuses = battle.petBonuses ?? emptyPetBonuses;
+  const uniqueEffectBonuses = equipBonuses.uniqueEffectBonuses ?? emptyUniqueEffectBonuses;
   const region = regions[battle.regionIndex];
   const hasAdvantage = hasElementAdvantage(equipBonuses.weaponElement, region.element);
   const monsterInfo = region.monsters[battle.killIndexInStage % region.monsters.length];
@@ -761,10 +839,12 @@ export default function AdventurePage() {
   const attack =
     (getTotalAttack(character.job, battle.level, battle.enhanceLevel) + equipBonuses.attackFlat) *
     (1 + traitBonuses.attackPercent / 100) *
-    (hasAdvantage ? elementAdvantageMultiplier + advancedClassBonuses.elementAdvantageBonus : 1) *
+    (hasAdvantage
+      ? elementAdvantageMultiplier + advancedClassBonuses.elementAdvantageBonus + uniqueEffectBonuses.elementAdvantageBonus
+      : 1) *
     (battle.cheerBuffActive ? 1 + cheerBuffAttackPercent / 100 : 1) *
     (1 + dexBonusPercent / 100) *
-    (1 + relicBonuses.allDamagePercent / 100);
+    (1 + (relicBonuses.allDamagePercent + petBonuses.attackPercent) / 100);
   const isBossReady = battle.stage >= stagesPerRegion;
 
   return (

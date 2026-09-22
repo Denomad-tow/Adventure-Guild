@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
-import { formatNumber } from "@/lib/format";
+import { formatNumber, formatDuration } from "@/lib/format";
+import ProgressBar from "@/components/ProgressBar";
 import {
   equipmentSlots,
   grades,
@@ -28,6 +29,18 @@ import { getAchievement } from "@/config/achievements";
 import { applyAchievementUnlock } from "@/lib/achievements";
 import { fetchGuildTownBonuses } from "@/lib/guildTown";
 import { emptyGuildTownBonuses } from "@/config/guildTown";
+import { fetchPets, hatchEgg, equipPet, unequipPet } from "@/lib/pets";
+import { getUniqueEffect } from "@/config/uniqueEffects";
+import {
+  getPetSpecies,
+  getPetEmoji,
+  getPetStageName,
+  getPetBonusValue,
+  getPetExpToNextLevel,
+  getPetFeedCost,
+  petMaxLevel,
+  petFeedExpGain,
+} from "@/config/pets";
 
 const rareOrBelowIndex = getGradeIndex("rare");
 const defaultBulkGrades = grades.filter((g) => getGradeIndex(g.id) <= rareOrBelowIndex).map((g) => g.id);
@@ -43,6 +56,19 @@ export default function BagPage() {
   const [bulkGrades, setBulkGrades] = useState(defaultBulkGrades);
   const [enhanceResult, setEnhanceResult] = useState(null);
   const [guildBonuses, setGuildBonuses] = useState(emptyGuildTownBonuses);
+  const [pets, setPets] = useState([]);
+  const [petBusy, setPetBusy] = useState(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const loadPets = useCallback(async (userId) => {
+    const data = await fetchPets(userId);
+    setPets(data);
+  }, []);
 
   const loadItems = useCallback(async (userId) => {
     if (!userId) return;
@@ -76,7 +102,9 @@ export default function BagPage() {
     fetchGuildTownBonuses()
       .then(setGuildBonuses)
       .catch(() => setGuildBonuses(emptyGuildTownBonuses));
-  }, [character?.user_id]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadPets(character.user_id);
+  }, [character?.user_id, loadPets]);
 
   if (!character) {
     return (
@@ -115,6 +143,47 @@ export default function BagPage() {
       .update({ progress: { ...progress, ...patch } })
       .eq("user_id", character.user_id);
     await refreshCharacter();
+  }
+
+  async function handleHatchEgg(pet) {
+    if (petBusy) return;
+    setPetBusy(pet.id);
+    const { error } = await hatchEgg(pet.id);
+    if (error) console.error("부화 실패:", error.message);
+    await loadPets(character.user_id);
+    setPetBusy(null);
+  }
+
+  async function handleFeedPet(pet) {
+    if (petBusy || pet.level >= petMaxLevel) return;
+    const cost = getPetFeedCost(pet.level);
+    if (stones < cost) return;
+    setPetBusy(pet.id);
+
+    let level = pet.level;
+    let exp = pet.exp + petFeedExpGain;
+    let expToNext = getPetExpToNextLevel(level);
+    while (exp >= expToNext && level < petMaxLevel) {
+      exp -= expToNext;
+      level += 1;
+      expToNext = getPetExpToNextLevel(level);
+    }
+
+    await supabase.from("pets").update({ level, exp }).eq("id", pet.id);
+    await updateProgress({ enhancementStones: stones - cost });
+    await loadPets(character.user_id);
+    setPetBusy(null);
+  }
+
+  async function handleTogglePetEquip(pet) {
+    if (petBusy) return;
+    setPetBusy(pet.id);
+    const { error } = pet.equipped
+      ? await unequipPet(pet.id)
+      : await equipPet(character.user_id, pet.id);
+    if (error) console.error("펫 장착 실패:", error.message);
+    await loadPets(character.user_id);
+    setPetBusy(null);
   }
 
   async function handleAutoEquip() {
@@ -219,7 +288,8 @@ export default function BagPage() {
       postGuildNews(
         character.user_id,
         character.nickname,
-        `${character.nickname}님이 강화 +${currentLevel + 1}에 실패했습니다... 😢`
+        `${character.nickname}님이 강화 +${currentLevel + 1}에 실패했습니다... 😢`,
+        "enhance_fail"
       );
     }
   }
@@ -292,6 +362,7 @@ export default function BagPage() {
                     +{item.enhance_level}
                   </span>
                 )}
+                {item?.unique_effect && <span className="absolute right-1 bottom-1 text-xs">✨</span>}
                 <span className="text-2xl">{itemType?.emoji ?? slot.emoji}</span>
                 {item?.element && (
                   <span className="absolute bottom-1 left-1 text-xs">
@@ -436,6 +507,9 @@ export default function BagPage() {
                       +{item.enhance_level}
                     </span>
                   )}
+                  {item.unique_effect && (
+                    <span className="absolute right-1 bottom-1 text-xs">✨</span>
+                  )}
                   <span className="text-2xl">{itemType?.emoji ?? slot.emoji}</span>
                   {item.element && (
                     <span className="absolute bottom-1 left-1 text-xs">
@@ -452,8 +526,100 @@ export default function BagPage() {
         )}
       </div>
 
+      {/* 펫 */}
+      <div>
+        <h2 className="mb-2 text-sm font-semibold text-zinc-950 dark:text-white">펫</h2>
+        {pets.length === 0 ? (
+          <p className="text-center text-sm text-zinc-400">
+            아직 알이나 펫이 없습니다. 사냥 중 아주 낮은 확률로 알을 얻을 수 있어요.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {pets.map((pet) => {
+              const species = getPetSpecies(pet.species_id);
+              const emoji = getPetEmoji(pet.species_id, pet.level, pet.is_egg);
+              const busy = petBusy === pet.id;
+
+              if (pet.is_egg) {
+                const hatchAt = new Date(pet.hatch_at).getTime();
+                const ready = hatchAt <= nowTick;
+                return (
+                  <div
+                    key={pet.id}
+                    className="flex items-center justify-between rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900"
+                  >
+                    <span className="text-zinc-950 dark:text-white">
+                      {emoji} {species?.name ?? "알"}의 알
+                    </span>
+                    {ready ? (
+                      <button
+                        type="button"
+                        onClick={() => handleHatchEgg(pet)}
+                        disabled={busy}
+                        className="rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+                      >
+                        부화시키기
+                      </button>
+                    ) : (
+                      <span className="text-xs text-zinc-400">
+                        {formatDuration(Math.ceil((hatchAt - nowTick) / 1000))} 후 부화
+                      </span>
+                    )}
+                  </div>
+                );
+              }
+
+              const expToNext = getPetExpToNextLevel(pet.level);
+              const isMax = pet.level >= petMaxLevel;
+              const feedCost = isMax ? null : getPetFeedCost(pet.level);
+              return (
+                <div key={pet.id} className="rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-950 dark:text-white">
+                      {emoji} {species?.name} ({getPetStageName(pet.level)}) Lv.{pet.level}
+                      {pet.equipped && <span className="ml-1 text-xs text-sky-500">장착 중</span>}
+                    </span>
+                    <span className="text-xs text-emerald-500">
+                      {species?.bonusLabel} +{getPetBonusValue(pet.species_id, pet.level)}%
+                    </span>
+                  </div>
+                  {!isMax && (
+                    <div className="mt-1">
+                      <ProgressBar
+                        value={pet.exp}
+                        max={expToNext}
+                        colorClassName="bg-sky-500"
+                        heightClassName="h-1.5"
+                      />
+                    </div>
+                  )}
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleFeedPet(pet)}
+                      disabled={busy || isMax || stones < feedCost}
+                      className="flex-1 rounded-lg border border-zinc-300 py-1.5 text-xs font-medium text-zinc-700 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+                    >
+                      {isMax ? "최대 레벨" : `먹이 주기 (🔩${feedCost})`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePetEquip(pet)}
+                      disabled={busy}
+                      className="flex-1 rounded-lg border border-zinc-300 py-1.5 text-xs font-medium text-zinc-700 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+                    >
+                      {pet.equipped ? "해제" : "장착"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        재료, 펫은 다음 단계들에서 추가될 예정입니다.
+        재료(별도 아이템)는 다음 단계들에서 추가될 예정입니다.
       </p>
 
       {/* 선택한 장비 상세 정보 */}
@@ -527,6 +693,20 @@ export default function BagPage() {
                 })}
               </div>
             )}
+
+            {selectedItem.unique_effect &&
+              (() => {
+                const effect = getUniqueEffect(selectedItem.unique_effect);
+                if (!effect) return null;
+                return (
+                  <div className="mt-3 rounded-lg bg-amber-100 p-3 text-sm dark:bg-amber-900/30">
+                    <p className="font-semibold text-amber-600 dark:text-amber-400">
+                      {effect.icon} 고유 효과: {effect.name}
+                    </p>
+                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">{effect.description}</p>
+                  </div>
+                );
+              })()}
 
             <div className="mt-3 rounded-lg bg-zinc-100 p-3 text-sm dark:bg-zinc-800">
               <div className="flex items-center justify-between">

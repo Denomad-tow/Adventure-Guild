@@ -33,9 +33,9 @@ export const maxIdleHours = 12;
 // 이 시간(초)보다 짧게 자리를 비웠으면 "다녀오셨군요!" 창을 띄우지 않는다 (새로고침 등 방지)
 export const minAwaySecondsForSummary = 60;
 
-// 능력치 강화: 골드로 공격력을 영구적으로 올린다. 비용 = 기본값 × 1.15^(강화 레벨)
+// 능력치 강화: 골드로 공격력을 영구적으로 올린다. 비용 = 기본값 × 1.12^(강화 레벨)
 export const enhanceBaseCost = 20;
-export const enhanceCostGrowth = 1.15;
+export const enhanceCostGrowth = 1.12;
 export const enhanceAttackBonus = 2;
 
 export function getAttackForLevel(jobId, level) {

@@ -17,8 +17,9 @@ import {
   fetchContributionBoard,
   computeChallengeDamage,
   challengeWorldBoss,
+  countRecentChallengers,
 } from "@/lib/worldBoss";
-import { getWorldBossLord, worldBossDailyChallengeLimit } from "@/config/worldBoss";
+import { getWorldBossLord, worldBossDailyChallengeLimit, rollIllusionWeakness } from "@/config/worldBoss";
 import { getElement } from "@/config/elements";
 import { getGrade } from "@/config/equipment";
 import { regions } from "@/config/regions";
@@ -30,12 +31,23 @@ import { guildBuildings, getBuildingUpgradeCost, getBuildingEffectValue, guildBu
 import { rollExpeditionResult, payExpeditionCompanionFee } from "@/lib/expeditions";
 import { getAdvancedClassBonuses } from "@/config/advancedClasses";
 import { expeditionMissions, getExpeditionMission, expeditionCompanionFeeGold } from "@/config/expeditions";
+import { advanceSeasonIfEnded, fetchSeasonLeaderboards } from "@/lib/season";
+import { isNewsCategoryVisible } from "@/config/guildNews";
+import { fetchRecentMessages, sendChatMessage, subscribeToChatMessages } from "@/lib/guildChat";
 
 const contributionPresets = [1000, 10000, 100000];
 
 const reactionEmojis = ["👏", "😂", "😭", "🔥"];
 const NEWS_LIMIT = 30;
-const emptyEquipBonuses = { attackFlat: 0, critRate: 0, critDamage: 0, goldFind: 0, weaponElement: null };
+const emptyEquipBonuses = {
+  attackFlat: 0,
+  critRate: 0,
+  critDamage: 0,
+  goldFind: 0,
+  weaponElement: null,
+  uniqueEffects: [],
+  uniqueEffectBonuses: { goldFindPercent: 0, elementAdvantageBonus: 0, critRate: 0, expPercent: 0 },
+};
 const emptyTraitBonuses = { attackPercent: 0, attackSpeedPercent: 0, goldFindPercent: 0, dropChancePercent: 0 };
 const rankingTabs = [
   { id: "level", label: "레벨" },
@@ -50,6 +62,58 @@ function getRegionLabel(unlockedRegionIndex) {
 
 export default function GuildPage() {
   const { character, refreshCharacter } = useAuth();
+  const [seasonState, setSeasonState] = useState(null);
+  const [seasonBoards, setSeasonBoards] = useState(null);
+  const [seasonEndedMessage, setSeasonEndedMessage] = useState(null);
+
+  useEffect(() => {
+    if (!character?.user_id) return;
+    advanceSeasonIfEnded().then(async ({ result, error }) => {
+      if (error) {
+        console.error("시즌 확인 실패:", error.message);
+        return;
+      }
+      if (result.just_ended) {
+        setSeasonEndedMessage(
+          `${result.result_season_number - 1}번째 시즌이 끝나고 보상이 지급됐습니다! ${result.result_season_number}번째 시즌이 시작됩니다.`
+        );
+      }
+      setSeasonState({
+        season_number: result.result_season_number,
+        started_at: result.result_started_at,
+        ends_at: result.result_ends_at,
+      });
+      const boards = await fetchSeasonLeaderboards(result.result_started_at);
+      setSeasonBoards(boards);
+    });
+  }, [character?.user_id]);
+
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+
+  useEffect(() => {
+    if (!character?.user_id) return undefined;
+    fetchRecentMessages().then(setChatMessages);
+    const unsubscribe = subscribeToChatMessages((newMessage) => {
+      setChatMessages((prev) => [...prev, newMessage]);
+    });
+    return unsubscribe;
+  }, [character?.user_id]);
+
+  async function handleSendChat(e) {
+    e.preventDefault();
+    if (!character || chatSending || !chatInput.trim()) return;
+    setChatSending(true);
+    const { error } = await sendChatMessage(character.user_id, character.nickname, chatInput);
+    if (error) {
+      console.error("채팅 전송 실패:", error.message);
+    } else {
+      setChatInput("");
+    }
+    setChatSending(false);
+  }
+
   const [news, setNews] = useState([]);
   const [reactionsByNews, setReactionsByNews] = useState({});
   const [loading, setLoading] = useState(true);
@@ -127,7 +191,8 @@ export default function GuildPage() {
       postGuildNews(
         character.user_id,
         character.nickname,
-        `${character.nickname}님의 기부로 ${building.name}이(가) Lv.${result.result_level}(으)로 올랐습니다!`
+        `${character.nickname}님의 기부로 ${building.name}이(가) Lv.${result.result_level}(으)로 올랐습니다!`,
+        "building_levelup"
       );
     }
 
@@ -254,6 +319,12 @@ export default function GuildPage() {
     );
     const { equipBonuses, traitBonuses } = combatStatsRef.current;
     const advancedClassBonuses = getAdvancedClassBonuses(character.job, character.progress?.advancedClass);
+    const currentLord = getWorldBossLord(bossState.lord_index);
+    const weaknessOverride = currentLord.id === "illusion" ? rollIllusionWeakness() : null;
+    const recentChallengerCount =
+      currentLord.id === "storm" || currentLord.id === "riftking"
+        ? await countRecentChallengers(bossState.lord_index)
+        : 0;
     const damage = computeChallengeDamage({
       job: character.job,
       level: character.level,
@@ -264,6 +335,8 @@ export default function GuildPage() {
       gold: character.progress?.gold ?? 0,
       lordIndex: bossState.lord_index,
       phaseEventActive,
+      weaknessOverride,
+      recentChallengerCount,
     });
 
     const { result, error } = await challengeWorldBoss(damage, character.nickname);
@@ -286,13 +359,15 @@ export default function GuildPage() {
       postGuildNews(
         character.user_id,
         character.nickname,
-        `${character.nickname}님이 길드와 함께 ${defeatedLord.name}을(를) 쓰러뜨렸습니다!`
+        `${character.nickname}님이 길드와 함께 ${defeatedLord.name}을(를) 쓰러뜨렸습니다!`,
+        "world_boss_defeat"
       );
       if (result.my_loot_grade === "legendary" || result.my_loot_grade === "mythic") {
         postGuildNews(
           character.user_id,
           character.nickname,
-          `${character.nickname}님이 ${defeatedLord.name} 처치 보상으로 ${getGrade(result.my_loot_grade).label} 장비를 얻었습니다!`
+          `${character.nickname}님이 ${defeatedLord.name} 처치 보상으로 ${getGrade(result.my_loot_grade).label} 장비를 얻었습니다!`,
+          "world_boss_loot"
         );
       }
 
@@ -307,7 +382,8 @@ export default function GuildPage() {
     } else if (result.phase_event_started) {
       setBossMessage(`${formatNumber(damage)}의 피해! 페이즈 돌입 - 30분간 길드 전체 피해 2배!`);
     } else {
-      setBossMessage(`${formatNumber(damage)}의 피해를 입혔습니다!`);
+      const weaknessText = weaknessOverride ? ` (이번 약점: ${weaknessOverride})` : "";
+      setBossMessage(`${formatNumber(damage)}의 피해를 입혔습니다!${weaknessText}`);
     }
     setTimeout(() => setBossMessage(null), 4000);
 
@@ -426,8 +502,83 @@ export default function GuildPage() {
     );
   }
 
+  const seasonRemainingMs = seasonState ? new Date(seasonState.ends_at).getTime() - nowTick : 0;
+  const visibleNews = news.filter((item) => isNewsCategoryVisible(character.progress?.newsFilters, item.category));
+
   return (
     <div className="flex flex-col gap-4 px-6 py-8">
+      {seasonEndedMessage && (
+        <div className="rounded-lg bg-amber-100 px-4 py-2 text-center text-sm font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+          {seasonEndedMessage}
+        </div>
+      )}
+
+      {seasonState && (
+        <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-bold text-zinc-950 dark:text-white">🏆 시즌 {seasonState.season_number}</span>
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              {seasonRemainingMs > 0 ? `${formatDuration(Math.ceil(seasonRemainingMs / 1000))} 남음` : "정산 중..."}
+            </span>
+          </div>
+          {seasonBoards && (
+            <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+              {[
+                { label: "도달 지역", board: seasonBoards.regionBoard },
+                { label: "업적", board: seasonBoards.achievementBoard },
+                { label: "월드보스 피해", board: seasonBoards.damageBoard },
+              ].map(({ label, board }) => (
+                <div key={label} className="rounded-lg bg-zinc-100 p-2 dark:bg-zinc-900">
+                  <p className="mb-1 font-medium text-zinc-500 dark:text-zinc-400">{label}</p>
+                  {board.length === 0 ? (
+                    <p className="text-zinc-400">-</p>
+                  ) : (
+                    board.slice(0, 3).map((row, i) => (
+                      <p key={row.nickname} className="truncate text-zinc-700 dark:text-zinc-300">
+                        {i + 1}. {row.nickname} ({formatNumber(row.value)})
+                      </p>
+                    ))
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div>
+        <h1 className="mb-2 text-lg font-bold text-zinc-950 dark:text-white">길드 채팅</h1>
+        <div className="flex h-56 flex-col gap-1.5 overflow-y-auto rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          {chatMessages.length === 0 ? (
+            <p className="text-center text-sm text-zinc-400">아직 채팅이 없습니다. 먼저 말을 걸어보세요!</p>
+          ) : (
+            chatMessages.map((msg) => (
+              <p key={msg.id} className="text-sm">
+                <span className="font-semibold text-zinc-950 dark:text-white">{msg.nickname}</span>
+                <span className="ml-1 text-zinc-600 dark:text-zinc-300">{msg.message}</span>
+              </p>
+            ))
+          )}
+        </div>
+        <form onSubmit={handleSendChat} className="mt-2 flex gap-2">
+          <input
+            type="text"
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            placeholder="메시지 입력..."
+            maxLength={300}
+            className="flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
+          />
+          <button
+            type="submit"
+            disabled={chatSending || !chatInput.trim()}
+            className="rounded-lg bg-zinc-950 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+          >
+            전송
+          </button>
+        </form>
+      </div>
+
       {cheerMessage && (
         <div className="rounded-lg bg-pink-100 px-4 py-2 text-center text-sm font-medium text-pink-700 dark:bg-pink-900/40 dark:text-pink-300">
           {cheerMessage}
@@ -448,7 +599,14 @@ export default function GuildPage() {
               </span>
             </div>
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              약점 {weakness?.emoji} {lord.weakness} · {lord.rule}
+              {lord.weakness ? (
+                <>
+                  약점 {weakness?.emoji} {lord.weakness} ·{" "}
+                </>
+              ) : (
+                "약점 없음 · "
+              )}
+              {lord.rule}
             </p>
             <div className="mt-2">
               <ProgressBar
@@ -819,13 +977,15 @@ export default function GuildPage() {
 
       {loading ? (
         <p className="text-center text-sm text-zinc-400">불러오는 중...</p>
-      ) : news.length === 0 ? (
+      ) : visibleNews.length === 0 ? (
         <p className="text-center text-sm text-zinc-400">
-          아직 소식이 없습니다. 지역을 개척하거나 전설 장비를 얻으면 여기 올라와요.
+          {news.length === 0
+            ? "아직 소식이 없습니다. 지역을 개척하거나 전설 장비를 얻으면 여기 올라와요."
+            : "더보기 탭 알림 설정에서 꺼둔 소식만 있습니다."}
         </p>
       ) : (
         <div className="flex flex-col gap-3">
-          {news.map((item) => {
+          {visibleNews.map((item) => {
             const reactions = reactionsByNews[item.id] ?? [];
             const myReaction = character
               ? reactions.find((r) => r.user_id === character.user_id)?.emoji

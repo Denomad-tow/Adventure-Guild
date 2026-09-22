@@ -14,12 +14,16 @@ import { getMonsterKey, getDexTier, getDexBonusPercent, isRegionDexComplete, get
 import { achievements } from "@/config/achievements";
 import { fetchGuildTownBonuses } from "@/lib/guildTown";
 import { emptyGuildTownBonuses } from "@/config/guildTown";
+import { worldBossLords } from "@/config/worldBoss";
+import { fetchDefeatedLordIds } from "@/lib/worldBoss";
+import { guildNewsCategories, getDefaultNewsFilters } from "@/config/guildNews";
 
 const moreTabs = [
   { id: "quests", label: "퀘스트" },
   { id: "dex", label: "도감" },
   { id: "achievements", label: "업적" },
   { id: "titles", label: "칭호" },
+  { id: "chronicle", label: "연대기" },
 ];
 
 export default function MorePage() {
@@ -34,6 +38,7 @@ export default function MorePage() {
   const [worldBossWeeklyCount, setWorldBossWeeklyCount] = useState(0);
   const [claimBusy, setClaimBusy] = useState(false);
   const [guildTownBonuses, setGuildTownBonuses] = useState(emptyGuildTownBonuses);
+  const [defeatedLordIds, setDefeatedLordIds] = useState(new Set());
 
   useEffect(() => {
     if (!character?.user_id) return;
@@ -42,6 +47,7 @@ export default function MorePage() {
     fetchGuildTownBonuses()
       .then(setGuildTownBonuses)
       .catch(() => setGuildTownBonuses(emptyGuildTownBonuses));
+    fetchDefeatedLordIds(character.user_id).then(setDefeatedLordIds);
   }, [character?.user_id]);
 
   function openConfirm() {
@@ -103,6 +109,13 @@ export default function MorePage() {
   const completedRegionCount = getCompletedRegionCount(monsterDex, regions);
   const dailyBoxReward = Math.round(dailyBonusBoxGold * (1 + guildTownBonuses.guildBoardRewardBonusPercent / 100));
 
+  const unlockedRegionIndex = progress.unlockedRegionIndex ?? 0;
+  const regionStories = regions
+    .map((region, index) => ({ region, index }))
+    .filter(({ index }) => unlockedRegionIndex > index);
+  const lordStories = worldBossLords.filter((lord) => defeatedLordIds.has(lord.id));
+  const newsFilters = { ...getDefaultNewsFilters(), ...(progress.newsFilters ?? {}) };
+
   async function updateProgress(updater) {
     setClaimBusy(true);
     await supabase
@@ -145,6 +158,13 @@ export default function MorePage() {
   async function handleEquipTitle(title) {
     if (claimBusy) return;
     await updateProgress((p) => ({ ...p, equippedTitle: title }));
+  }
+
+  async function handleToggleNewsFilter(categoryId) {
+    if (claimBusy) return;
+    const current = { ...getDefaultNewsFilters(), ...(progress.newsFilters ?? {}) };
+    current[categoryId] = !current[categoryId];
+    await updateProgress((p) => ({ ...p, newsFilters: current }));
   }
 
   return (
@@ -365,9 +385,71 @@ export default function MorePage() {
         </div>
       )}
 
-      <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        연대기, 설정은 다음 단계들에서 추가될 예정입니다.
-      </p>
+      {activeTab === "chronicle" && (
+        <div className="flex flex-col gap-4">
+          <div>
+            <h2 className="mb-2 text-sm font-semibold text-zinc-950 dark:text-white">지역 이야기</h2>
+            {regionStories.length === 0 ? (
+              <p className="text-center text-sm text-zinc-400">아직 열린 이야기가 없습니다. 지역 보스를 격파해보세요.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {regionStories.map(({ region }) => (
+                  <div key={region.id} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+                    <p className="text-sm font-semibold text-zinc-950 dark:text-white">
+                      {region.boss.emoji} {region.name} - {region.boss.name}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{region.clearStory}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h2 className="mb-2 text-sm font-semibold text-zinc-950 dark:text-white">군주 이야기</h2>
+            {lordStories.length === 0 ? (
+              <p className="text-center text-sm text-zinc-400">
+                아직 열린 이야기가 없습니다. 길드와 함께 월드 보스를 처치해보세요.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {lordStories.map((lord) => (
+                  <div key={lord.id} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+                    <p className="text-sm font-semibold text-zinc-950 dark:text-white">
+                      {lord.emoji} {lord.name}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{lord.story}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
+        <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">길드 소식 알림 설정</h2>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          꺼두면 길드 탭 소식 피드에서 그 종류만 안 보입니다 (다른 사람에게는 그대로 올라가요).
+        </p>
+        <div className="mt-3 flex flex-col gap-2">
+          {guildNewsCategories.map((category) => (
+            <label
+              key={category.id}
+              className="flex items-center justify-between rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900"
+            >
+              <span className="text-zinc-950 dark:text-white">{category.label}</span>
+              <input
+                type="checkbox"
+                checked={newsFilters[category.id] !== false}
+                onChange={() => handleToggleNewsFilter(category.id)}
+                disabled={claimBusy}
+                className="h-4 w-4"
+              />
+            </label>
+          ))}
+        </div>
+      </div>
 
       <div className="flex flex-col gap-3">
         <button
