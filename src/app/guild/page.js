@@ -1,15 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
-import { formatRelativeTime } from "@/lib/format";
+import { formatRelativeTime, formatNumber } from "@/lib/format";
 import { getJob } from "@/config/jobs";
 import { sendCheer, getRemainingCheersToday } from "@/lib/cheers";
 import { cheerDailyLimit, cheerContributionReward } from "@/config/guild";
+import ProgressBar from "@/components/ProgressBar";
+import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
+import { getTraitBonuses } from "@/config/traits";
+import { postGuildNews } from "@/lib/guildNews";
+import {
+  fetchWorldBossState,
+  getRemainingChallengesToday,
+  fetchContributionBoard,
+  computeChallengeDamage,
+  challengeWorldBoss,
+} from "@/lib/worldBoss";
+import { getWorldBossLord, worldBossDailyChallengeLimit } from "@/config/worldBoss";
+import { getElement } from "@/config/elements";
+import { getGrade } from "@/config/equipment";
 
 const reactionEmojis = ["👏", "😂", "😭", "🔥"];
 const NEWS_LIMIT = 30;
+const emptyEquipBonuses = { attackFlat: 0, critRate: 0, critDamage: 0, goldFind: 0, weaponElement: null };
+const emptyTraitBonuses = { attackPercent: 0, attackSpeedPercent: 0, goldFindPercent: 0, dropChancePercent: 0 };
 
 export default function GuildPage() {
   const { character, refreshCharacter } = useAuth();
@@ -21,6 +37,102 @@ export default function GuildPage() {
   const [remainingCheers, setRemainingCheers] = useState(cheerDailyLimit);
   const [cheerBusyId, setCheerBusyId] = useState(null);
   const [cheerMessage, setCheerMessage] = useState(null);
+
+  const [bossState, setBossState] = useState(null);
+  const [phaseEventActive, setPhaseEventActive] = useState(false);
+  const [bossBoard, setBossBoard] = useState([]);
+  const [remainingChallenges, setRemainingChallenges] = useState(worldBossDailyChallengeLimit);
+  const [bossBusy, setBossBusy] = useState(false);
+  const [bossMessage, setBossMessage] = useState(null);
+  const combatStatsRef = useRef({ equipBonuses: emptyEquipBonuses, traitBonuses: emptyTraitBonuses });
+
+  const loadWorldBoss = useCallback(async (userId, lordIndexHint) => {
+    const state = await fetchWorldBossState();
+    if (!state) return;
+    setBossState(state);
+    setPhaseEventActive(Boolean(state.phase_event_until && new Date(state.phase_event_until).getTime() > Date.now()));
+    const lordIndex = lordIndexHint ?? state.lord_index;
+    const [remaining, board] = await Promise.all([
+      userId ? getRemainingChallengesToday(userId, lordIndex) : worldBossDailyChallengeLimit,
+      fetchContributionBoard(lordIndex),
+    ]);
+    setRemainingChallenges(remaining);
+    setBossBoard(board);
+  }, []);
+
+  useEffect(() => {
+    if (!character?.user_id) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadWorldBoss(character.user_id);
+    fetchEquippedBonuses(character.user_id)
+      .then((equipBonuses) => {
+        combatStatsRef.current = {
+          equipBonuses: equipBonuses ?? emptyEquipBonuses,
+          traitBonuses: getTraitBonuses(character.progress?.traits),
+        };
+      })
+      .catch(() => {});
+  }, [character?.user_id, character?.progress?.traits, loadWorldBoss]);
+
+  async function handleChallengeBoss() {
+    if (!character || !bossState || bossBusy || remainingChallenges <= 0) return;
+    setBossBusy(true);
+
+    const phaseEventActive = Boolean(
+      bossState.phase_event_until && new Date(bossState.phase_event_until).getTime() > Date.now()
+    );
+    const { equipBonuses, traitBonuses } = combatStatsRef.current;
+    const damage = computeChallengeDamage({
+      job: character.job,
+      level: character.level,
+      enhanceLevel: character.progress?.enhanceLevel ?? 0,
+      equipBonuses,
+      traitBonuses,
+      gold: character.progress?.gold ?? 0,
+      lordIndex: bossState.lord_index,
+      phaseEventActive,
+    });
+
+    const { result, error } = await challengeWorldBoss(damage, character.nickname);
+    if (error) {
+      console.error("월드 보스 도전 실패:", error.message);
+      setBossBusy(false);
+      return;
+    }
+
+    const defeatedLord = getWorldBossLord(bossState.lord_index);
+    if (result.was_lethal) {
+      const lootText = result.my_loot_grade
+        ? ` + ${getGrade(result.my_loot_grade).label} 장비 획득!`
+        : "";
+      setBossMessage(
+        `${formatNumber(damage)}의 피해! ${defeatedLord.name}을(를) 쓰러뜨렸습니다! 보상 ${formatNumber(
+          result.my_reward_gold
+        )}G${lootText}`
+      );
+      postGuildNews(
+        character.user_id,
+        character.nickname,
+        `${character.nickname}님이 길드와 함께 ${defeatedLord.name}을(를) 쓰러뜨렸습니다!`
+      );
+      if (result.my_loot_grade === "legendary" || result.my_loot_grade === "mythic") {
+        postGuildNews(
+          character.user_id,
+          character.nickname,
+          `${character.nickname}님이 ${defeatedLord.name} 처치 보상으로 ${getGrade(result.my_loot_grade).label} 장비를 얻었습니다!`
+        );
+      }
+    } else if (result.phase_event_started) {
+      setBossMessage(`${formatNumber(damage)}의 피해! 페이즈 돌입 - 30분간 길드 전체 피해 2배!`);
+    } else {
+      setBossMessage(`${formatNumber(damage)}의 피해를 입혔습니다!`);
+    }
+    setTimeout(() => setBossMessage(null), 4000);
+
+    await loadWorldBoss(character.user_id, result.result_lord_index);
+    await refreshCharacter();
+    setBossBusy(false);
+  }
 
   const loadRoster = useCallback(async (userId) => {
     if (!userId) return;
@@ -127,6 +239,66 @@ export default function GuildPage() {
         </div>
       )}
 
+      {bossState && (() => {
+        const lord = getWorldBossLord(bossState.lord_index);
+        const weakness = getElement(lord.weakness);
+        return (
+          <div className="rounded-xl border border-purple-300 bg-purple-50 p-4 dark:border-purple-800 dark:bg-purple-950/30">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-bold text-zinc-950 dark:text-white">
+                {lord.emoji} {lord.name}
+              </span>
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                오늘 남은 도전 {remainingChallenges}/{worldBossDailyChallengeLimit}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              약점 {weakness?.emoji} {lord.weakness} · {lord.rule}
+            </p>
+            <div className="mt-2">
+              <ProgressBar
+                value={bossState.current_hp}
+                max={bossState.max_hp}
+                colorClassName="bg-purple-600"
+                heightClassName="h-3"
+              />
+              <p className="mt-1 text-right text-xs text-zinc-500 dark:text-zinc-400">
+                {formatNumber(bossState.current_hp)} / {formatNumber(bossState.max_hp)}
+              </p>
+            </div>
+            {phaseEventActive && (
+              <p className="mt-1 text-center text-xs font-semibold text-amber-600 dark:text-amber-400">
+                🔥 페이즈 이벤트 중! 지금 도전하면 피해 2배
+              </p>
+            )}
+            {bossMessage && (
+              <p className="mt-2 rounded-lg bg-white px-3 py-2 text-center text-xs text-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
+                {bossMessage}
+              </p>
+            )}
+            {bossBoard.length > 0 && (
+              <div className="mt-3 flex flex-col gap-1">
+                <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">기여도 순위</p>
+                {bossBoard.map((row, i) => (
+                  <div key={row.nickname} className="flex justify-between text-xs text-zinc-600 dark:text-zinc-300">
+                    <span>{i + 1}. {row.nickname}</span>
+                    <span>{formatNumber(row.damage)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleChallengeBoss}
+              disabled={bossBusy || remainingChallenges <= 0}
+              className="mt-3 w-full rounded-lg bg-purple-600 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+            >
+              도전하기
+            </button>
+          </div>
+        );
+      })()}
+
       <div>
         <div className="flex items-center justify-between">
           <h1 className="text-lg font-bold text-zinc-950 dark:text-white">길드원</h1>
@@ -230,7 +402,7 @@ export default function GuildPage() {
       )}
 
       <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        월드 보스, 길드 마을, 용병, 파견, 랭킹은 다음 단계들에서 추가될 예정입니다.
+        길드 마을, 용병, 파견, 랭킹은 다음 단계들에서 추가될 예정입니다.
       </p>
     </div>
   );
