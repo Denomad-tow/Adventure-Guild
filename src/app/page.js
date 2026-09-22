@@ -66,7 +66,7 @@ function applyHit(state, damage) {
   let exp = state.exp + reward.exp;
   const goldMultiplier = 1 + (state.equipBonuses?.goldFind ?? 0) / 100;
   const gold = state.gold + Math.round(reward.gold * goldMultiplier);
-  const droppedItem = rollEquipmentDrop();
+  const droppedItem = rollEquipmentDrop(regions[state.regionIndex]?.id);
 
   let expToNext = getExpToNextLevel(level);
   while (exp >= expToNext) {
@@ -234,6 +234,7 @@ export default function AdventurePage() {
             slot: drop.slot,
             grade: drop.grade,
             options: drop.options,
+            set_id: drop.setId,
           })
           .then(({ error }) => {
             if (error) {

@@ -5,7 +5,7 @@ import { getEquipmentStatBonuses } from "@/config/equipment";
 export async function fetchEquippedBonuses(userId) {
   const { data, error } = await supabase
     .from("equipment")
-    .select("grade, options")
+    .select("grade, options, enhance_level, set_id")
     .eq("user_id", userId)
     .eq("equipped", true);
 

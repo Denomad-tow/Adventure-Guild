@@ -13,6 +13,13 @@ import {
   getGradeIndex,
   getDisassembleReward,
   getSellReward,
+  getEquipmentSet,
+  getActiveSetStatuses,
+  getItemEnhanceCost,
+  getItemEnhanceSuccessRate,
+  rollItemEnhanceSuccess,
+  maxItemEnhanceLevel,
+  enhanceFailureStartLevel,
 } from "@/config/equipment";
 
 const rareOrBelowIndex = getGradeIndex("rare");
@@ -27,6 +34,7 @@ export default function BagPage() {
   const [busy, setBusy] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkGrades, setBulkGrades] = useState(defaultBulkGrades);
+  const [enhanceResult, setEnhanceResult] = useState(null);
 
   const loadItems = useCallback(async (userId) => {
     if (!userId) return;
@@ -82,6 +90,7 @@ export default function BagPage() {
   const selectedItem = items.find((item) => item.id === selectedId) ?? null;
   const bulkTargets = unequippedItems.filter((item) => bulkGrades.includes(item.grade));
   const bulkStoneTotal = bulkTargets.reduce((sum, item) => sum + getDisassembleReward(item.grade), 0);
+  const activeSets = getActiveSetStatuses(items.filter((item) => item.equipped));
 
   function toggleBulkGrade(gradeId) {
     setBulkGrades((prev) =>
@@ -133,6 +142,23 @@ export default function BagPage() {
     setBusy(false);
   }
 
+  async function handleEnhanceItem(item) {
+    const currentLevel = item.enhance_level ?? 0;
+    const cost = getItemEnhanceCost(currentLevel);
+    if (currentLevel >= maxItemEnhanceLevel || stones < cost) return;
+
+    setBusy(true);
+    const success = rollItemEnhanceSuccess(currentLevel);
+    const newLevel = success ? currentLevel + 1 : currentLevel;
+
+    await supabase.from("equipment").update({ enhance_level: newLevel }).eq("id", item.id);
+    await updateProgress({ enhancementStones: stones - cost });
+    await loadItems(character.user_id);
+    setEnhanceResult({ success });
+    setTimeout(() => setEnhanceResult(null), 2000);
+    setBusy(false);
+  }
+
   async function handleBulkDisassemble() {
     if (bulkTargets.length === 0) return;
     setBulkBusy(true);
@@ -170,13 +196,18 @@ export default function BagPage() {
                 key={slot.id}
                 type="button"
                 onClick={() => item && setSelectedId(item.id)}
-                className="flex aspect-square flex-col items-center justify-center gap-1 rounded-xl border-2"
+                className="relative flex aspect-square flex-col items-center justify-center gap-1 rounded-xl border-2"
                 style={{
                   borderColor: grade ? grade.color : "rgba(161,161,170,0.35)",
                   borderStyle: grade ? "solid" : "dashed",
                   background: grade ? `${grade.color}1a` : "transparent",
                 }}
               >
+                {item?.enhance_level > 0 && (
+                  <span className="absolute right-1 top-1 text-[10px] font-bold text-sky-500">
+                    +{item.enhance_level}
+                  </span>
+                )}
                 <span className="text-2xl">{slot.emoji}</span>
                 <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
                   {grade ? grade.label : slot.label}
@@ -186,6 +217,33 @@ export default function BagPage() {
           })}
         </div>
       </div>
+
+      {/* 세트 효과 현황 */}
+      {activeSets.length > 0 && (
+        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          <h2 className="mb-2 text-sm font-semibold text-zinc-950 dark:text-white">세트 효과</h2>
+          {activeSets.map((set) => {
+            const bonus = set.count >= 4 ? set.bonus4 : set.count >= 2 ? set.bonus2 : null;
+            return (
+              <div key={set.id} className="flex items-center justify-between text-sm">
+                <span className="text-zinc-600 dark:text-zinc-300">
+                  {set.name} ({set.count}개)
+                </span>
+                <span className="text-xs font-medium text-emerald-500">
+                  {bonus
+                    ? Object.entries(bonus)
+                        .map(
+                          ([type, value]) =>
+                            `${getOptionType(type)?.label ?? type} +${value}${getOptionType(type)?.suffix ?? ""}`
+                        )
+                        .join(", ")
+                    : `2개부터 효과 발동 (${2 - set.count}개 더 필요)`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* 부위별 필터 */}
       <div className="flex gap-2 overflow-x-auto pb-1">
@@ -283,6 +341,11 @@ export default function BagPage() {
                   {isDowngrade && (
                     <span className="absolute right-1 top-1 text-xs font-bold text-zinc-400">▼</span>
                   )}
+                  {item.enhance_level > 0 && (
+                    <span className="absolute left-1 top-1 text-[10px] font-bold text-sky-500">
+                      +{item.enhance_level}
+                    </span>
+                  )}
                   <span className="text-2xl">{slot.emoji}</span>
                   <span className="text-[10px] font-medium" style={{ color: grade.color }}>
                     {grade.label}
@@ -307,7 +370,15 @@ export default function BagPage() {
               <div>
                 <p className="text-base font-bold" style={{ color: getGrade(selectedItem.grade).color }}>
                   {getGrade(selectedItem.grade).label} {getSlot(selectedItem.slot).label}
+                  {selectedItem.enhance_level > 0 && (
+                    <span className="ml-1 text-sky-500">+{selectedItem.enhance_level}</span>
+                  )}
                 </p>
+                {selectedItem.set_id && getEquipmentSet(selectedItem.set_id) && (
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    {getEquipmentSet(selectedItem.set_id).name}
+                  </p>
+                )}
                 {selectedItem.equipped && (
                   <span className="text-xs text-zinc-500 dark:text-zinc-400">장착 중</span>
                 )}
@@ -354,7 +425,42 @@ export default function BagPage() {
               </div>
             )}
 
-            <div className="mt-4 flex gap-2">
+            <div className="mt-3 rounded-lg bg-zinc-100 p-3 text-sm dark:bg-zinc-800">
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-500 dark:text-zinc-400">
+                  개별 강화 (+{selectedItem.enhance_level ?? 0} / +{maxItemEnhanceLevel})
+                </span>
+                {(selectedItem.enhance_level ?? 0) >= enhanceFailureStartLevel && (
+                  <span className="text-xs text-red-500">
+                    성공률{" "}
+                    {Math.round(getItemEnhanceSuccessRate(selectedItem.enhance_level ?? 0) * 100)}%
+                  </span>
+                )}
+              </div>
+              {(selectedItem.enhance_level ?? 0) < maxItemEnhanceLevel ? (
+                <button
+                  type="button"
+                  onClick={() => handleEnhanceItem(selectedItem)}
+                  disabled={busy || stones < getItemEnhanceCost(selectedItem.enhance_level ?? 0)}
+                  className="mt-2 w-full rounded-lg bg-zinc-950 py-2 text-xs font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+                >
+                  강화하기 (🔩{getItemEnhanceCost(selectedItem.enhance_level ?? 0)})
+                </button>
+              ) : (
+                <p className="mt-2 text-center text-xs text-zinc-400">최대 강화 단계입니다.</p>
+              )}
+              {enhanceResult && (
+                <p
+                  className={`mt-1 text-center text-xs font-semibold ${
+                    enhanceResult.success ? "text-emerald-500" : "text-red-500"
+                  }`}
+                >
+                  {enhanceResult.success ? "강화 성공!" : "강화 실패... 강화석만 소모되었습니다."}
+                </p>
+              )}
+            </div>
+
+            <div className="mt-3 flex gap-2">
               <button
                 type="button"
                 onClick={() => handleEquip(selectedItem)}
