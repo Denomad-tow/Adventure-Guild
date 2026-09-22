@@ -9,7 +9,10 @@ import ProgressBar from "@/components/ProgressBar";
 import WelcomeBackModal from "@/components/WelcomeBackModal";
 import BossResultModal from "@/components/BossResultModal";
 import RegionSelector from "@/components/RegionSelector";
+import DropToast from "@/components/DropToast";
 import { regions } from "@/config/regions";
+import { rollEquipmentDrop } from "@/config/equipment";
+import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import {
   jobBattleStats,
   getTotalAttack,
@@ -23,6 +26,8 @@ import {
   killsPerStage,
   eliteMultiplier,
 } from "@/config/balance";
+
+const emptyEquipBonuses = { attackFlat: 0, critRate: 0, critDamage: 0, goldFind: 0 };
 
 function initialMonsterState(regionIndex, stage) {
   const hp = getStageMonsterHp(regionIndex, stage);
@@ -40,6 +45,7 @@ const initialBattleState = {
   isElite: false,
   regionStage: regions.map(() => 1),
   unlockedRegionIndex: 0,
+  equipBonuses: emptyEquipBonuses,
   ...initialMonsterState(0, 1),
 };
 
@@ -58,7 +64,9 @@ function applyHit(state, damage) {
 
   let level = state.level;
   let exp = state.exp + reward.exp;
-  const gold = state.gold + reward.gold;
+  const goldMultiplier = 1 + (state.equipBonuses?.goldFind ?? 0) / 100;
+  const gold = state.gold + Math.round(reward.gold * goldMultiplier);
+  const droppedItem = rollEquipmentDrop();
 
   let expToNext = getExpToNextLevel(level);
   while (exp >= expToNext) {
@@ -97,6 +105,7 @@ function applyHit(state, damage) {
     isElite,
     monsterMaxHp,
     monsterHp: monsterMaxHp,
+    droppedItem,
   };
 }
 
@@ -107,6 +116,8 @@ async function saveProgress(character, battle) {
     .update({
       level: battle.level,
       progress: {
+        // 가방 탭의 강화석처럼, 모험 탭이 다루지 않는 값들은 그대로 보존한다.
+        ...(character.progress ?? {}),
         exp: battle.exp,
         gold: battle.gold,
         enhanceLevel: battle.enhanceLevel,
@@ -132,6 +143,7 @@ export default function AdventurePage() {
   const [monsterHurt, setMonsterHurt] = useState(false);
   const [bossFightHp, setBossFightHp] = useState(null);
   const [bossResult, setBossResult] = useState(null);
+  const [drops, setDrops] = useState([]);
 
   const loadedRef = useRef(false);
   const battleRef = useRef(battle);
@@ -159,9 +171,12 @@ export default function AdventurePage() {
         regionStage,
         unlockedRegionIndex: progress.unlockedRegionIndex ?? 0,
       };
-      const state = { ...loaded, ...initialMonsterState(regionIndex, stage) };
-      battleRef.current = state;
-      setBattle(state);
+
+      fetchEquippedBonuses(character.user_id).then((equipBonuses) => {
+        const state = { ...loaded, equipBonuses, ...initialMonsterState(regionIndex, stage) };
+        battleRef.current = state;
+        setBattle(state);
+      });
     }
   }, [character]);
 
@@ -174,9 +189,12 @@ export default function AdventurePage() {
     const timer = setInterval(() => {
       if (!loadedRef.current || bossFightingRef.current) return;
       const current = battleRef.current;
-      const attack = getTotalAttack(character.job, current.level, current.enhanceLevel);
-      const isCrit = Math.random() < stats.critRate;
-      const damage = Math.round(attack * (isCrit ? stats.critDamage : 1));
+      const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
+      const attack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
+      const critRate = stats.critRate + equipBonuses.critRate / 100;
+      const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
+      const isCrit = Math.random() < critRate;
+      const damage = Math.round(attack * (isCrit ? critDamage : 1));
       const next = applyHit(current, damage);
 
       battleRef.current = next;
@@ -196,6 +214,29 @@ export default function AdventurePage() {
       if (isCrit) {
         setShake(true);
         setTimeout(() => setShake(false), 300);
+      }
+
+      if (next.droppedItem) {
+        const drop = next.droppedItem;
+        const dropId = ++hitCounterRef.current;
+        supabase
+          .from("equipment")
+          .insert({
+            user_id: character.user_id,
+            slot: drop.slot,
+            grade: drop.grade,
+            options: drop.options,
+          })
+          .then(({ error }) => {
+            if (error) {
+              console.error("장비 저장 실패:", error.message);
+              return;
+            }
+            setDrops((prev) => [...prev, { id: dropId, slot: drop.slot, grade: drop.grade }]);
+            setTimeout(() => {
+              setDrops((prev) => prev.filter((d) => d.id !== dropId));
+            }, 3000);
+          });
       }
 
       if (next.level > current.level) {
@@ -277,9 +318,12 @@ export default function AdventurePage() {
       expToNext = getExpToNextLevel(level);
     }
 
+    const goldMultiplier = 1 + (current.equipBonuses?.goldFind ?? 0) / 100;
+    const bossGold = Math.round(reward.gold * goldMultiplier);
+
     const next = {
       ...current,
-      gold: current.gold + reward.gold,
+      gold: current.gold + bossGold,
       exp,
       level,
       unlockedRegionIndex: newUnlocked,
@@ -298,7 +342,7 @@ export default function AdventurePage() {
       bossName: region.boss.name,
       bossEmoji: region.boss.emoji,
       storyLine: region.clearStory,
-      gold: reward.gold,
+      gold: bossGold,
       exp: reward.exp,
       justUnlockedNext,
     });
@@ -317,7 +361,8 @@ export default function AdventurePage() {
   }
 
   const expToNext = getExpToNextLevel(battle.level);
-  const attack = getTotalAttack(character.job, battle.level, battle.enhanceLevel);
+  const equipBonuses = battle.equipBonuses ?? emptyEquipBonuses;
+  const attack = getTotalAttack(character.job, battle.level, battle.enhanceLevel) + equipBonuses.attackFlat;
   const region = regions[battle.regionIndex];
   const monsterInfo = region.monsters[battle.killIndexInStage % region.monsters.length];
   const isBossReady = battle.stage >= stagesPerRegion;
@@ -344,8 +389,11 @@ export default function AdventurePage() {
               {battle.enhanceLevel > 0 && (
                 <span className="text-emerald-500">
                   {" "}
-                  (+{formatNumber(getEnhanceAttackBonus(battle.enhanceLevel))})
+                  (강화 +{formatNumber(getEnhanceAttackBonus(battle.enhanceLevel))})
                 </span>
+              )}
+              {equipBonuses.attackFlat > 0 && (
+                <span className="text-sky-500"> (장비 +{formatNumber(equipBonuses.attackFlat)})</span>
               )}
             </span>
           </div>
@@ -370,6 +418,8 @@ export default function AdventurePage() {
           shake ? "screen-shake" : ""
         }`}
       >
+        <DropToast drops={drops} />
+
         {/* 하늘 */}
         <div className="absolute inset-0 bg-gradient-to-b from-sky-300 via-sky-200 to-amber-50" />
         <div className="cloud-drift absolute left-6 top-6 h-6 w-16 rounded-full bg-white/80" />

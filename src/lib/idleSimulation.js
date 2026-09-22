@@ -14,8 +14,17 @@ import {
 // 지역 보스는 버튼을 눌러 직접 도전하는 것이라 방치 중에는 자동으로 싸우지 않는다.
 const MAX_ITERATIONS = 200000;
 
-export function simulateIdleProgress(startState, elapsedSeconds, jobId, enhanceLevel = 0) {
+export function simulateIdleProgress(
+  startState,
+  elapsedSeconds,
+  jobId,
+  enhanceLevel = 0,
+  equipBonuses = { attackFlat: 0, critRate: 0, critDamage: 0, goldFind: 0 }
+) {
   const stats = jobBattleStats[jobId] ?? jobBattleStats.warrior;
+  const critRate = stats.critRate + equipBonuses.critRate / 100;
+  const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
+  const goldMultiplier = 1 + equipBonuses.goldFind / 100;
   const state = { ...startState };
   let timeLeft = elapsedSeconds;
   let iterations = 0;
@@ -23,8 +32,8 @@ export function simulateIdleProgress(startState, elapsedSeconds, jobId, enhanceL
 
   while (timeLeft > 0 && iterations < MAX_ITERATIONS) {
     iterations += 1;
-    const attack = getTotalAttack(jobId, state.level, enhanceLevel);
-    const avgDamage = attack * (1 - stats.critRate + stats.critRate * stats.critDamage);
+    const attack = getTotalAttack(jobId, state.level, enhanceLevel) + equipBonuses.attackFlat;
+    const avgDamage = attack * (1 - critRate + critRate * critDamage);
     const dps = avgDamage * stats.attackSpeed;
     if (dps <= 0) break;
 
@@ -37,7 +46,8 @@ export function simulateIdleProgress(startState, elapsedSeconds, jobId, enhanceL
 
     timeLeft -= timeToKill;
     monstersKilled += 1;
-    state.gold += isElite ? baseReward.gold * eliteMultiplier : baseReward.gold;
+    const goldGain = isElite ? baseReward.gold * eliteMultiplier : baseReward.gold;
+    state.gold += Math.round(goldGain * goldMultiplier);
     state.exp += isElite ? baseReward.exp * eliteMultiplier : baseReward.exp;
 
     if (isElite) {

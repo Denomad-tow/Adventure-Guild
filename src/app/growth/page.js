@@ -1,10 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { getJob } from "@/config/jobs";
 import { supabase } from "@/lib/supabaseClient";
 import { formatNumber } from "@/lib/format";
+import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import {
   getTotalAttack,
   getEnhanceAttackBonus,
@@ -17,7 +18,21 @@ export default function GrowthPage() {
   const job = character ? getJob(character.job) : null;
   const [count, setCount] = useState(enhanceBatchOptions[0]);
   const [enhancing, setEnhancing] = useState(false);
+  const [equipAttackBonus, setEquipAttackBonus] = useState(0);
   const enhancingRef = useRef(false);
+
+  // 탭을 급하게 오갈 때 골드가 옛날 값으로 보이는 걸 줄이기 위해,
+  // 이 탭에 들어올 때마다 캐릭터 정보를 한 번 더 최신으로 받아온다.
+  useEffect(() => {
+    refreshCharacter();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (character?.user_id) {
+      fetchEquippedBonuses(character.user_id).then((bonuses) => setEquipAttackBonus(bonuses.attackFlat));
+    }
+  }, [character?.user_id]);
 
   if (!character || !job) {
     return (
@@ -31,8 +46,8 @@ export default function GrowthPage() {
   const gold = progress.gold ?? 0;
   const enhanceLevel = progress.enhanceLevel ?? 0;
   const totalCost = getEnhanceTotalCost(enhanceLevel, count);
-  const currentAttack = getTotalAttack(character.job, character.level, enhanceLevel);
-  const nextAttack = getTotalAttack(character.job, character.level, enhanceLevel + count);
+  const currentAttack = getTotalAttack(character.job, character.level, enhanceLevel) + equipAttackBonus;
+  const nextAttack = getTotalAttack(character.job, character.level, enhanceLevel + count) + equipAttackBonus;
   const canAfford = gold >= totalCost;
 
   async function handleEnhance() {
@@ -99,8 +114,13 @@ export default function GrowthPage() {
           <span className="font-semibold text-zinc-950 dark:text-white">
             {formatNumber(currentAttack)}
             <span className="ml-1 text-xs font-normal text-emerald-500">
-              (강화 보너스 +{formatNumber(getEnhanceAttackBonus(enhanceLevel))})
+              (강화 +{formatNumber(getEnhanceAttackBonus(enhanceLevel))})
             </span>
+            {equipAttackBonus > 0 && (
+              <span className="ml-1 text-xs font-normal text-sky-500">
+                (장비 +{formatNumber(equipAttackBonus)})
+              </span>
+            )}
           </span>
         </div>
 

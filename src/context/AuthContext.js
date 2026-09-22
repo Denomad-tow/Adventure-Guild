@@ -6,6 +6,7 @@ import { simulateIdleProgress } from "@/lib/idleSimulation";
 import { formatDuration } from "@/lib/format";
 import { maxIdleHours, minAwaySecondsForSummary } from "@/config/balance";
 import { regions } from "@/config/regions";
+import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 
 const AuthContext = createContext(null);
 
@@ -58,8 +59,11 @@ export function AuthProvider({ children }) {
           killIndexInStage: 0, // 스테이지 안에서 몇 마리 잡았는지는 방치 중엔 기억하지 않는다 (사소한 단순화)
           regionStage: [...regionStage],
         };
-        const result = simulateIdleProgress(baseState, awaySeconds, data.job, enhanceLevel);
+        const equipBonuses = await fetchEquippedBonuses(userId);
+        const result = simulateIdleProgress(baseState, awaySeconds, data.job, enhanceLevel, equipBonuses);
         const updatedProgress = {
+          // 강화석처럼 방치 계산이 다루지 않는 값들은 그대로 보존한다.
+          ...progress,
           exp: result.exp,
           gold: result.gold,
           enhanceLevel,
@@ -99,12 +103,11 @@ export function AuthProvider({ children }) {
     await fetchCharacter(data.user?.id);
   }, [fetchCharacter]);
 
+  // onAuthStateChange는 구독 시작 시 "지금 로그인 상태가 뭐야"를 즉시 한 번 알려주고,
+  // 이후 로그인/로그아웃이 실제로 일어날 때마다 다시 알려준다.
+  // getSession()을 따로 또 부르면 이 콜백과 동시에 fetchCharacter가 두 번 실행돼서
+  // 방치 보상 계산이 꼬일 수 있으므로(경쟁 상태), 여기 하나로만 통일한다.
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      fetchCharacter(data.session?.user?.id);
-    });
-
     const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
       fetchCharacter(newSession?.user?.id);
