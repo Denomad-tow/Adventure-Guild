@@ -21,11 +21,22 @@ import {
 import { getWorldBossLord, worldBossDailyChallengeLimit } from "@/config/worldBoss";
 import { getElement } from "@/config/elements";
 import { getGrade } from "@/config/equipment";
+import { regions } from "@/config/regions";
 
 const reactionEmojis = ["👏", "😂", "😭", "🔥"];
 const NEWS_LIMIT = 30;
 const emptyEquipBonuses = { attackFlat: 0, critRate: 0, critDamage: 0, goldFind: 0, weaponElement: null };
 const emptyTraitBonuses = { attackPercent: 0, attackSpeedPercent: 0, goldFindPercent: 0, dropChancePercent: 0 };
+const rankingTabs = [
+  { id: "level", label: "레벨" },
+  { id: "region", label: "도달 지역" },
+  { id: "contribution", label: "길드 공헌도" },
+];
+
+function getRegionLabel(unlockedRegionIndex) {
+  const index = Math.min(unlockedRegionIndex, regions.length - 1);
+  return regions[index]?.name ?? regions[0].name;
+}
 
 export default function GuildPage() {
   const { character, refreshCharacter } = useAuth();
@@ -45,6 +56,17 @@ export default function GuildPage() {
   const [bossBusy, setBossBusy] = useState(false);
   const [bossMessage, setBossMessage] = useState(null);
   const combatStatsRef = useRef({ equipBonuses: emptyEquipBonuses, traitBonuses: emptyTraitBonuses });
+
+  const [rankingBoard, setRankingBoard] = useState([]);
+  const [rankingTab, setRankingTab] = useState("level");
+
+  useEffect(() => {
+    if (!character?.user_id) return;
+    supabase
+      .from("guild_roster")
+      .select("*")
+      .then(({ data }) => setRankingBoard(data ?? []));
+  }, [character?.user_id]);
 
   const loadWorldBoss = useCallback(async (userId, lordIndexHint) => {
     const state = await fetchWorldBossState();
@@ -335,6 +357,61 @@ export default function GuildPage() {
         )}
       </div>
 
+      <div>
+        <h1 className="text-lg font-bold text-zinc-950 dark:text-white">랭킹</h1>
+        <div className="mt-2 flex gap-1.5">
+          {rankingTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setRankingTab(tab.id)}
+              className={`rounded-full px-3 py-1 text-xs font-medium ${
+                rankingTab === tab.id
+                  ? "bg-zinc-950 text-white dark:bg-white dark:text-zinc-950"
+                  : "bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="mt-2 flex flex-col gap-1">
+          {[...rankingBoard]
+            .sort((a, b) => {
+              if (rankingTab === "region") return b.unlocked_region_index - a.unlocked_region_index;
+              if (rankingTab === "contribution") return b.guild_contribution - a.guild_contribution;
+              return b.level - a.level;
+            })
+            .slice(0, 5)
+            .map((member, i) => {
+              const memberJob = getJob(member.job);
+              const isMe = member.user_id === character?.user_id;
+              const valueText =
+                rankingTab === "region"
+                  ? getRegionLabel(member.unlocked_region_index)
+                  : rankingTab === "contribution"
+                    ? `${formatNumber(member.guild_contribution)}`
+                    : `Lv.${member.level}`;
+              return (
+                <div
+                  key={member.user_id}
+                  className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm ${
+                    isMe
+                      ? "bg-amber-100 dark:bg-amber-900/40"
+                      : "bg-zinc-100 dark:bg-zinc-900"
+                  }`}
+                >
+                  <span className="text-zinc-950 dark:text-white">
+                    {i + 1}. {memberJob?.emoji ?? "🙂"} {member.nickname}
+                    {isMe && " (나)"}
+                  </span>
+                  <span className="font-semibold text-zinc-600 dark:text-zinc-300">{valueText}</span>
+                </div>
+              );
+            })}
+        </div>
+      </div>
+
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold text-zinc-950 dark:text-white">길드 소식</h1>
         <button
@@ -402,7 +479,7 @@ export default function GuildPage() {
       )}
 
       <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        길드 마을, 용병, 파견, 랭킹은 다음 단계들에서 추가될 예정입니다.
+        길드 마을, 파견은 다음 단계들에서 추가될 예정입니다.
       </p>
     </div>
   );
