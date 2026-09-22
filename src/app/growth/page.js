@@ -10,7 +10,10 @@ import {
   getJobSkills,
   getSkillEnhanceCost,
   getSkillMultiplier,
+  getSkillEnhanceSuccessRate,
+  rollSkillEnhanceSuccess,
   maxSkillLevel,
+  skillEnhanceFailureStartLevel,
 } from "@/config/skills";
 import {
   traitBranches,
@@ -34,6 +37,7 @@ export default function GrowthPage() {
   const [equipAttackBonus, setEquipAttackBonus] = useState(0);
   const [traitBusy, setTraitBusy] = useState(false);
   const [skillBusyId, setSkillBusyId] = useState(null);
+  const [skillEnhanceResult, setSkillEnhanceResult] = useState(null);
   const enhancingRef = useRef(false);
 
   // 탭을 급하게 오갈 때 골드가 옛날 값으로 보이는 걸 줄이기 위해,
@@ -115,7 +119,13 @@ export default function GrowthPage() {
     const cost = getSkillEnhanceCost(currentLevel);
     if (skillBusyId || currentLevel >= maxSkillLevel || stones < cost) return;
     setSkillBusyId(skillId);
-    const nextSkillLevels = { ...skillLevels, [skillId]: currentLevel + 1 };
+    setSkillEnhanceResult(null);
+
+    const success = rollSkillEnhanceSuccess(currentLevel);
+    const nextSkillLevels = success
+      ? { ...skillLevels, [skillId]: currentLevel + 1 }
+      : skillLevels;
+
     await supabase
       .from("characters")
       .update({
@@ -124,6 +134,8 @@ export default function GrowthPage() {
       .eq("user_id", character.user_id);
     await refreshCharacter();
     setSkillBusyId(null);
+    setSkillEnhanceResult({ skillId, success });
+    setTimeout(() => setSkillEnhanceResult(null), 2000);
   }
 
   async function handleResetTraits() {
@@ -236,6 +248,8 @@ export default function GrowthPage() {
             const level = skillLevels[skill.id] ?? 0;
             const cost = getSkillEnhanceCost(level);
             const isMax = level >= maxSkillLevel;
+            const showSuccessRate = level >= skillEnhanceFailureStartLevel;
+            const result = skillEnhanceResult?.skillId === skill.id ? skillEnhanceResult : null;
             return (
               <div key={skill.id} className="rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
                 <div className="flex items-center justify-between">
@@ -247,6 +261,11 @@ export default function GrowthPage() {
                     쿨타임 {skill.cooldown}초 · 공격력 ×{getSkillMultiplier(skill, level).toFixed(2)}
                   </span>
                 </div>
+                {showSuccessRate && !isMax && (
+                  <p className="mt-1 text-right text-[11px] text-red-500">
+                    성공률 {Math.round(getSkillEnhanceSuccessRate(level) * 100)}%
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => handleEnhanceSkill(skill.id)}
@@ -255,6 +274,15 @@ export default function GrowthPage() {
                 >
                   {isMax ? "최대 강화" : `강화하기 (🔩${cost})`}
                 </button>
+                {result && (
+                  <p
+                    className={`mt-1 text-center text-xs font-semibold ${
+                      result.success ? "text-emerald-500" : "text-red-500"
+                    }`}
+                  >
+                    {result.success ? "강화 성공!" : "강화 실패... 강화석만 소모되었습니다."}
+                  </p>
+                )}
               </div>
             );
           })}

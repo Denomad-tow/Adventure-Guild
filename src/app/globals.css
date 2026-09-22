@@ -129,3 +129,17 @@ body {
 .monster-hurt {
   animation: monster-hurt 0.25s ease-out;
 }
+
+@keyframes goblin-run {
+  0% {
+    left: -10%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+.goblin-run {
+  position: absolute;
+  animation: goblin-run linear forwards;
+}

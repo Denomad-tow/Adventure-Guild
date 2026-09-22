@@ -8,6 +8,7 @@ import { maxIdleHours, minAwaySecondsForSummary } from "@/config/balance";
 import { regions } from "@/config/regions";
 import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import { getMySessionId, setMySessionId, createSessionId } from "@/lib/sessionGuard";
+import { pickJournalLines } from "@/config/journalTemplates";
 
 const OTHER_LOCATION_MESSAGE = "다른 곳에서 접속하였습니다.";
 
@@ -117,6 +118,7 @@ export function AuthProvider({ children }) {
           levelsGained: result.levelsGained,
           leveledFrom: result.leveledFrom,
           leveledTo: result.leveledTo,
+          journalLines: pickJournalLines(4),
         });
 
         setCharacter({ ...data, level: result.level, progress: updatedProgress });

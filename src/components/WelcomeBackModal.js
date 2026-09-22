@@ -35,6 +35,17 @@ export default function WelcomeBackModal({ summary, onClose }) {
           )}
         </div>
 
+        {summary.journalLines?.length > 0 && (
+          <div className="mt-3 rounded-lg border border-zinc-200 p-3 text-left text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+            <p className="mb-1 font-semibold text-zinc-700 dark:text-zinc-300">📖 모험 일지</p>
+            <ul className="flex flex-col gap-1">
+              {summary.journalLines.map((line, idx) => (
+                <li key={idx}>· {line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <button
           type="button"
           onClick={onClose}

@@ -27,8 +27,11 @@ export function getJobSkills(jobId) {
 }
 
 // 스킬 개별 강화: 강화석으로 스킬 피해를 올린다. 레벨당 배율 +5%, 최대 20강.
+// +10까지는 항상 성공하고, +11부터는 실패할 수 있다 (실패해도 강화석만 소모).
 export const maxSkillLevel = 20;
 export const skillLevelBonusPerPoint = 0.05;
+export const skillEnhanceFailureStartLevel = 10;
+const skillEnhanceSuccessRates = [0.8, 0.7, 0.6, 0.5, 0.45, 0.4, 0.35, 0.3, 0.25, 0.2];
 
 export function getSkillEnhanceCost(currentLevel) {
   return 3 + currentLevel * 2;
@@ -36,4 +39,13 @@ export function getSkillEnhanceCost(currentLevel) {
 
 export function getSkillMultiplier(skill, level) {
   return skill.multiplier * (1 + (level ?? 0) * skillLevelBonusPerPoint);
+}
+
+export function getSkillEnhanceSuccessRate(currentLevel) {
+  if (currentLevel < skillEnhanceFailureStartLevel) return 1;
+  return skillEnhanceSuccessRates[currentLevel - skillEnhanceFailureStartLevel] ?? 0.1;
+}
+
+export function rollSkillEnhanceSuccess(currentLevel) {
+  return Math.random() < getSkillEnhanceSuccessRate(currentLevel);
 }

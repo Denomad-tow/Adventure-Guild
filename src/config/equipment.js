@@ -142,6 +142,29 @@ export function getSellReward(gradeId) {
   return sellGoldReward[getGradeIndex(gradeId)] ?? 1;
 }
 
+// 방랑 상인이 파는 장비: 지정한 등급 이상만 나온다 (기본은 희귀 이상).
+export function rollMerchantItem(minGradeId = "rare") {
+  const minIndex = getGradeIndex(minGradeId);
+  const pool = grades.slice(minIndex);
+  const totalWeight = pool.reduce((sum, g) => sum + g.dropRate, 0);
+  let roll = Math.random() * totalWeight;
+  let grade = pool[0].id;
+  for (const g of pool) {
+    roll -= g.dropRate;
+    if (roll <= 0) {
+      grade = g.id;
+      break;
+    }
+  }
+  const slot = equipmentSlots[Math.floor(Math.random() * equipmentSlots.length)].id;
+  const options = rollOptions(grade);
+  return { slot, grade, options, setId: null };
+}
+
+export function getMerchantPrice(gradeId, priceMultiplier) {
+  return getSellReward(gradeId) * priceMultiplier;
+}
+
 // 장착 중인 장비 목록을 넣으면, 전투에 실제로 반영할 보너스 합계를 계산해준다.
 // (개별 강화 단계와 세트 효과까지 모두 반영)
 export function getEquipmentStatBonuses(equippedItems) {

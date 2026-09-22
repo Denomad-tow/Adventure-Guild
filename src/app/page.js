@@ -11,10 +11,21 @@ import BossResultModal from "@/components/BossResultModal";
 import RegionSelector from "@/components/RegionSelector";
 import DropToast from "@/components/DropToast";
 import { regions } from "@/config/regions";
-import { rollEquipmentDrop } from "@/config/equipment";
+import { rollEquipmentDrop, rollMerchantItem, getMerchantPrice, getGrade, getSlot } from "@/config/equipment";
 import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import { getJobSkills, getSkillMultiplier } from "@/config/skills";
 import { getTraitBonuses } from "@/config/traits";
+import {
+  merchantCheckIntervalMs,
+  merchantChancePerCheck,
+  merchantDurationMs,
+  merchantMinGrade,
+  merchantPriceMultiplier,
+  goblinCheckIntervalMs,
+  goblinChancePerCheck,
+  goblinVisibleDurationMs,
+  goblinGoldRewardMultiplier,
+} from "@/config/events";
 import {
   jobBattleStats,
   getTotalAttack,
@@ -151,12 +162,21 @@ export default function AdventurePage() {
   const [bossFightHp, setBossFightHp] = useState(null);
   const [bossResult, setBossResult] = useState(null);
   const [drops, setDrops] = useState([]);
+  const [merchant, setMerchant] = useState(null);
+  const [goblin, setGoblin] = useState(null);
+  const [eventMessage, setEventMessage] = useState(null);
 
   const loadedRef = useRef(false);
+  // ready(state)는 렌더링용이고, readyRef는 이 값이 정말 최신인지 클린업(언마운트) 시점에서도
+  // 정확히 확인하기 위한 것이다. loadedRef만 보고 저장하면, 캐릭터 정보를 아직 다 불러오기 전
+  // (장비 보너스 조회가 끝나기 전)에 화면이 닫혔을 때 기본값(레벨1, 골드0)이 저장될 수 있다.
+  const readyRef = useRef(false);
   const battleRef = useRef(battle);
   const hitCounterRef = useRef(0);
   const bossFightingRef = useRef(false);
   const skillLastTriggeredRef = useRef({});
+  const merchantRef = useRef(null);
+  const goblinRef = useRef(null);
 
   // 캐릭터 정보가 도착하면, 저장되어 있던 값으로 전투 상태를 한 번만 채운다.
   // (방치 보상 계산은 로그인 시점에 AuthContext에서 이미 끝난 상태로 넘어온다)
@@ -194,6 +214,7 @@ export default function AdventurePage() {
           };
           battleRef.current = state;
           setBattle(state);
+          readyRef.current = true;
           setReady(true);
         });
     }
@@ -320,11 +341,107 @@ export default function AdventurePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [character?.job, character?.user_id, ready]);
 
+  // 방랑 상인: 가끔 나타나서 한동안(기본 10분) 머무르며 장비를 판다.
+  useEffect(() => {
+    if (!character || !ready) return;
+    const timer = setInterval(() => {
+      if (bossFightingRef.current) return;
+      const current = merchantRef.current;
+      if (current) {
+        if (Date.now() >= current.expiresAt) {
+          merchantRef.current = null;
+          setMerchant(null);
+        }
+        return;
+      }
+      if (Math.random() >= merchantChancePerCheck) return;
+      const item = rollMerchantItem(merchantMinGrade);
+      const price = getMerchantPrice(item.grade, merchantPriceMultiplier);
+      const next = { item, price, expiresAt: Date.now() + merchantDurationMs };
+      merchantRef.current = next;
+      setMerchant(next);
+    }, merchantCheckIntervalMs);
+
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [character?.user_id, ready]);
+
+  // 보물 고블린: 가끔 나타났다가 제한 시간 안에 탭하지 않으면 도망간다.
+  useEffect(() => {
+    if (!character || !ready) return;
+    const timer = setInterval(() => {
+      if (bossFightingRef.current || goblinRef.current) return;
+      if (Math.random() >= goblinChancePerCheck) return;
+      const id = Date.now();
+      const next = { id, expiresAt: id + goblinVisibleDurationMs };
+      goblinRef.current = next;
+      setGoblin(next);
+      setTimeout(() => {
+        if (goblinRef.current?.id === id) {
+          goblinRef.current = null;
+          setGoblin(null);
+        }
+      }, goblinVisibleDurationMs);
+    }, goblinCheckIntervalMs);
+
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [character?.user_id, ready]);
+
+  async function handleBuyMerchantItem() {
+    if (!merchant) return;
+    const current = battleRef.current;
+    if (current.gold < merchant.price) return;
+
+    const { error } = await supabase.from("equipment").insert({
+      user_id: character.user_id,
+      slot: merchant.item.slot,
+      grade: merchant.item.grade,
+      options: merchant.item.options,
+      set_id: merchant.item.setId,
+    });
+    if (error) {
+      console.error("상인 장비 구매 실패:", error.message);
+      return;
+    }
+
+    const next = { ...current, gold: current.gold - merchant.price };
+    battleRef.current = next;
+    setBattle(next);
+    merchantRef.current = null;
+    setMerchant(null);
+    setEventMessage(`${getGrade(merchant.item.grade).label} ${getSlot(merchant.item.slot).label}을(를) 구매했습니다!`);
+    setTimeout(() => setEventMessage(null), 2500);
+
+    await saveProgress(character, next);
+    await refreshCharacter();
+  }
+
+  function handleCatchGoblin() {
+    if (!goblinRef.current) return;
+    goblinRef.current = null;
+    setGoblin(null);
+
+    const current = battleRef.current;
+    const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
+    const traitBonuses = current.traitBonuses ?? emptyTraitBonuses;
+    const goldMultiplier = 1 + (equipBonuses.goldFind + traitBonuses.goldFindPercent) / 100;
+    const baseReward = getStageMonsterReward(current.regionIndex, current.stage);
+    const bonusGold = Math.round(baseReward.gold * goblinGoldRewardMultiplier * goldMultiplier);
+    const next = { ...current, gold: current.gold + bonusGold };
+    battleRef.current = next;
+    setBattle(next);
+    setEventMessage(`보물 고블린을 잡았다! +${formatNumber(bonusGold)}G`);
+    setTimeout(() => setEventMessage(null), 2500);
+
+    saveProgress(character, next).then(() => refreshCharacter());
+  }
+
   // 화면을 나갈 때(다른 탭 이동 등) 지금까지 진행 상황을 저장하고,
   // 다른 탭(성장 등)에서도 최신 골드/레벨을 볼 수 있게 캐릭터 정보를 새로고침한다.
   useEffect(() => {
     return () => {
-      if (loadedRef.current) {
+      if (readyRef.current) {
         saveProgress(character, battleRef.current).then(() => refreshCharacter());
       }
     };
@@ -448,6 +565,12 @@ export default function AdventurePage() {
       <WelcomeBackModal summary={welcomeSummary} onClose={clearWelcomeSummary} />
       <BossResultModal result={bossResult} onClose={() => setBossResult(null)} />
 
+      {eventMessage && (
+        <div className="rounded-lg bg-amber-100 px-4 py-2 text-center text-sm font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+          {eventMessage}
+        </div>
+      )}
+
       <div className="flex items-center gap-3">
         <span className="text-3xl">{job.emoji}</span>
         <div className="flex-1">
@@ -561,6 +684,19 @@ export default function AdventurePage() {
             ? `${region.boss.name} 도전 중...`
             : `${monsterInfo.name}${battle.isElite ? " (정예)" : ""} · ${region.name} ${battle.stage}스테이지`}
         </div>
+
+        {/* 보물 고블린: 항상 맨 위에 그려서 확실히 탭할 수 있게 한다 */}
+        {goblin && (
+          <button
+            type="button"
+            onClick={handleCatchGoblin}
+            className="goblin-run z-30 bottom-16 flex h-14 w-14 items-center justify-center whitespace-nowrap text-4xl leading-none"
+            style={{ animationDuration: `${goblinVisibleDurationMs}ms` }}
+            aria-label="보물 고블린 잡기"
+          >
+            👺
+          </button>
+        )}
       </div>
 
       {isBossReady && !bossFightHp && (
@@ -581,8 +717,33 @@ export default function AdventurePage() {
         </div>
       )}
 
+      {merchant && (
+        <div className="flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🧳</span>
+            <div>
+              <p className="text-sm font-medium text-zinc-950 dark:text-white">
+                방랑 상인:{" "}
+                <span style={{ color: getGrade(merchant.item.grade).color }}>
+                  {getGrade(merchant.item.grade).label} {getSlot(merchant.item.slot).label}
+                </span>
+              </p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">잠시 후 떠납니다.</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleBuyMerchantItem}
+            disabled={battle.gold < merchant.price}
+            className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+          >
+            {formatNumber(merchant.price)}G
+          </button>
+        </div>
+      )}
+
       <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        모험 일지, 돌발 이벤트는 다음 단계에서 추가될 예정입니다.
+        나머지 돌발 이벤트는 다음 단계에서 추가될 예정입니다.
       </p>
     </div>
   );
