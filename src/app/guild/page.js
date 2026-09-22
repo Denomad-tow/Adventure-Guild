@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
-import { formatRelativeTime, formatNumber } from "@/lib/format";
+import { formatRelativeTime, formatNumber, formatDuration } from "@/lib/format";
 import { getJob } from "@/config/jobs";
 import { sendCheer, getRemainingCheersToday } from "@/lib/cheers";
 import { cheerDailyLimit, cheerContributionReward } from "@/config/guild";
@@ -27,6 +27,8 @@ import { getAchievement } from "@/config/achievements";
 import { applyAchievementUnlock } from "@/lib/achievements";
 import { fetchGuildBuildings, fetchBuildingContributionBoard, contributeToBuilding } from "@/lib/guildTown";
 import { guildBuildings, getBuildingUpgradeCost, getBuildingEffectValue, guildBuildingMaxLevel } from "@/config/guildTown";
+import { rollExpeditionResult, payExpeditionCompanionFee } from "@/lib/expeditions";
+import { expeditionMissions, getExpeditionMission, expeditionCompanionFeeGold } from "@/config/expeditions";
 
 const contributionPresets = [1000, 10000, 100000];
 
@@ -135,6 +137,83 @@ export default function GuildPage() {
     }
     await refreshCharacter();
     setContributeBusy(null);
+  }
+
+  const [expeditionBusy, setExpeditionBusy] = useState(false);
+  const [expeditionResult, setExpeditionResult] = useState(null);
+  const [selectedCompanion, setSelectedCompanion] = useState(null);
+  const [showCompanionPicker, setShowCompanionPicker] = useState(false);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const expedition = character?.progress?.expedition ?? null;
+  const expeditionMission = expedition ? getExpeditionMission(expedition.missionId) : null;
+  const expeditionRemainingMs = expedition ? new Date(expedition.endsAt).getTime() - nowTick : 0;
+  const expeditionReady = Boolean(expedition) && expeditionRemainingMs <= 0;
+
+  async function handleStartExpedition(missionId) {
+    if (!character || expeditionBusy || expedition) return;
+    setExpeditionBusy(true);
+
+    const mission = getExpeditionMission(missionId);
+    const startedAt = new Date();
+    const endsAt = new Date(startedAt.getTime() + mission.durationHours * 3600 * 1000);
+    const companion = selectedCompanion;
+
+    if (companion) {
+      await payExpeditionCompanionFee(character.user_id, character.nickname, companion, missionId);
+    }
+
+    const progress = character.progress ?? {};
+    await supabase
+      .from("characters")
+      .update({
+        progress: {
+          ...progress,
+          expedition: {
+            missionId,
+            startedAt: startedAt.toISOString(),
+            endsAt: endsAt.toISOString(),
+            companionId: companion?.user_id ?? null,
+            companionNickname: companion?.nickname ?? null,
+          },
+        },
+      })
+      .eq("user_id", character.user_id);
+
+    await refreshCharacter();
+    setSelectedCompanion(null);
+    setShowCompanionPicker(false);
+    setExpeditionBusy(false);
+  }
+
+  async function handleReturnExpedition() {
+    if (!character || expeditionBusy || !expedition || !expeditionReady) return;
+    setExpeditionBusy(true);
+
+    const mission = getExpeditionMission(expedition.missionId);
+    const result = rollExpeditionResult(mission, Boolean(expedition.companionId));
+
+    const progress = character.progress ?? {};
+    await supabase
+      .from("characters")
+      .update({
+        progress: {
+          ...progress,
+          gold: (progress.gold ?? 0) + result.gold,
+          enhancementStones: (progress.enhancementStones ?? 0) + result.stones,
+          expedition: null,
+        },
+      })
+      .eq("user_id", character.user_id);
+
+    await refreshCharacter();
+    setExpeditionResult({ mission, companionNickname: expedition.companionNickname, ...result });
+    setExpeditionBusy(false);
   }
 
   const loadWorldBoss = useCallback(async (userId, lordIndexHint) => {
@@ -589,6 +668,137 @@ export default function GuildPage() {
         </div>
       </div>
 
+      <div>
+        <h1 className="text-lg font-bold text-zinc-950 dark:text-white">파견</h1>
+
+        {expeditionResult && (
+          <div className="mt-2 rounded-lg bg-zinc-100 p-3 text-sm dark:bg-zinc-900">
+            <p className={expeditionResult.success ? "font-semibold text-emerald-500" : "font-semibold text-zinc-500 dark:text-zinc-400"}>
+              {expeditionResult.mission.icon} {expeditionResult.mission.name} {expeditionResult.success ? "성공!" : "아쉽게 실패..."}
+            </p>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{expeditionResult.storyLine}</p>
+            <p className="mt-1 text-xs font-medium text-amber-500">
+              +{formatNumber(expeditionResult.gold)}G · 🔩+{formatNumber(expeditionResult.stones)}
+            </p>
+            <button
+              type="button"
+              onClick={() => setExpeditionResult(null)}
+              className="mt-2 w-full rounded-lg bg-zinc-950 py-1.5 text-xs font-semibold text-white dark:bg-white dark:text-zinc-950"
+            >
+              확인
+            </button>
+          </div>
+        )}
+
+        {expedition ? (
+          <div className="mt-2 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold text-zinc-950 dark:text-white">
+                {expeditionMission?.icon} {expeditionMission?.name}
+              </span>
+              {expedition.companionNickname && (
+                <span className="text-xs text-sky-500">🤝 {expedition.companionNickname}</span>
+              )}
+            </div>
+            <p className="mt-2 text-center text-sm text-zinc-500 dark:text-zinc-400">
+              {expeditionReady
+                ? "원정대가 돌아왔습니다!"
+                : `복귀까지 ${formatDuration(Math.ceil(expeditionRemainingMs / 1000))}`}
+            </p>
+            <button
+              type="button"
+              onClick={handleReturnExpedition}
+              disabled={expeditionBusy || !expeditionReady}
+              className="mt-3 w-full rounded-lg bg-zinc-950 py-2.5 text-sm font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+            >
+              복귀하기
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="mt-2 flex items-center justify-between rounded-lg bg-zinc-100 px-3 py-2 text-xs dark:bg-zinc-900">
+              {selectedCompanion ? (
+                <span className="text-sky-600 dark:text-sky-400">
+                  🤝 {selectedCompanion.nickname}과 동행 (사례금 {formatNumber(expeditionCompanionFeeGold)}G)
+                </span>
+              ) : (
+                <span className="text-zinc-400">동행 없음</span>
+              )}
+              <div className="flex items-center gap-2">
+                {selectedCompanion && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCompanion(null)}
+                    className="text-zinc-400 underline"
+                  >
+                    취소
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowCompanionPicker((v) => !v)}
+                  disabled={roster.length === 0}
+                  className="rounded-lg border border-zinc-300 px-2 py-1 font-medium text-zinc-600 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+                >
+                  🤝 동행 선택
+                </button>
+              </div>
+            </div>
+
+            {showCompanionPicker && (
+              <div className="mt-1 flex flex-col gap-1 rounded-lg bg-white p-2 dark:bg-zinc-900">
+                {roster.length === 0 ? (
+                  <p className="text-center text-xs text-zinc-400">아직 다른 길드원이 없습니다.</p>
+                ) : (
+                  roster.map((member) => (
+                    <button
+                      key={member.user_id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedCompanion(member);
+                        setShowCompanionPicker(false);
+                      }}
+                      className="flex items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                      <span>
+                        {member.nickname} · Lv.{member.level}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+
+            <div className="mt-2 flex flex-col gap-2">
+              {expeditionMissions.map((mission) => (
+                <div
+                  key={mission.id}
+                  className="flex items-center justify-between rounded-xl border border-zinc-200 p-3 dark:border-zinc-800"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-zinc-950 dark:text-white">
+                      {mission.icon} {mission.name}
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      {mission.durationHours}시간 · 성공률 {Math.round(mission.baseSuccessRate * 100)}% ·{" "}
+                      {formatNumber(mission.goldMin)}~{formatNumber(mission.goldMax)}G
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleStartExpedition(mission.id)}
+                    disabled={expeditionBusy}
+                    className="rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+                  >
+                    파견
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold text-zinc-950 dark:text-white">길드 소식</h1>
         <button
@@ -654,10 +864,6 @@ export default function GuildPage() {
           })}
         </div>
       )}
-
-      <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        파견은 다음 단계들에서 추가될 예정입니다.
-      </p>
     </div>
   );
 }
