@@ -11,6 +11,7 @@ import BossResultModal from "@/components/BossResultModal";
 import CheerNotificationModal from "@/components/CheerNotificationModal";
 import RegionSelector from "@/components/RegionSelector";
 import DropToast from "@/components/DropToast";
+import CharacterAvatar from "@/components/CharacterAvatar";
 import { regions } from "@/config/regions";
 import { rollEquipmentDrop, rollMerchantItem, getMerchantPrice, getGrade, getSlot, getItemType } from "@/config/equipment";
 import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
@@ -68,6 +69,7 @@ const emptyEquipBonuses = {
   weaponElement: null,
   uniqueEffects: [],
   uniqueEffectBonuses: emptyUniqueEffectBonuses,
+  equippedItems: [],
 };
 
 // 공격 한 번에 대해, 장착한 전설+ 장비의 "확률 발동" 고유 효과를 굴려서 추가 타격을 만들어낸다.
@@ -961,7 +963,7 @@ export default function AdventurePage() {
 
         {/* 캐릭터 */}
         <div className={`absolute bottom-6 left-10 flex flex-col items-center ${attacking ? "attack-lunge" : ""}`}>
-          <span className="text-6xl drop-shadow">{job.emoji}</span>
+          <CharacterAvatar jobEmoji={job.emoji} equippedItems={equipBonuses.equippedItems ?? []} />
           <div className="h-2 w-12 rounded-full bg-black/20 blur-[2px]" />
         </div>
 
@@ -980,6 +982,10 @@ export default function AdventurePage() {
             />
           </div>
           <div className="relative text-6xl drop-shadow">
+            <span
+              className="absolute left-1/2 top-1/2 -z-10 h-14 w-14 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-40 blur-lg"
+              style={{ background: bossFightHp ? "#a855f7" : getElement(region.element)?.color }}
+            />
             {bossFightHp ? region.boss.emoji : monsterInfo.emoji}
             {battle.isElite && !bossFightHp && (
               <span className="absolute -top-2 -right-1 text-lg">⭐</span>

@@ -8,6 +8,7 @@ import { getJob } from "@/config/jobs";
 import { sendCheer, getRemainingCheersToday } from "@/lib/cheers";
 import { cheerDailyLimit, cheerContributionReward } from "@/config/guild";
 import ProgressBar from "@/components/ProgressBar";
+import VillageScene from "@/components/VillageScene";
 import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import { getTraitBonuses } from "@/config/traits";
 import { postGuildNews } from "@/lib/guildNews";
@@ -754,6 +755,15 @@ export default function GuildPage() {
             {contributeMessage}
           </p>
         )}
+        <div className="mt-2">
+          <VillageScene
+            buildings={guildBuildings}
+            buildingLevels={townBuildings}
+            maxLevel={guildBuildingMaxLevel}
+            selectedId={expandedBuilding}
+            onSelect={toggleBuildingBoard}
+          />
+        </div>
         <div className="mt-2 flex flex-col gap-2">
           {guildBuildings.map((building) => {
             const state = townBuildings[building.id] ?? { level: 0, progress_gold: 0 };

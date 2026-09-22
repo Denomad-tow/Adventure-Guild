@@ -7,7 +7,7 @@ import { getPassiveUniqueEffectBonuses } from "@/config/uniqueEffects";
 export async function fetchEquippedBonuses(userId) {
   const { data, error } = await supabase
     .from("equipment")
-    .select("slot, grade, options, enhance_level, set_id, element, unique_effect")
+    .select("slot, grade, options, enhance_level, set_id, element, unique_effect, item_type")
     .eq("user_id", userId)
     .eq("equipped", true);
 
@@ -22,5 +22,7 @@ export async function fetchEquippedBonuses(userId) {
     weaponElement: getEquippedWeaponElement(items),
     uniqueEffects,
     uniqueEffectBonuses: getPassiveUniqueEffectBonuses(uniqueEffects),
+    // 캐릭터 그림에 장착 장비를 그대로 보여주기 위한 원본 목록 (부위/등급/종류).
+    equippedItems: items,
   };
 }

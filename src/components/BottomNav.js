@@ -9,8 +9,9 @@ export default function BottomNav() {
 
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 z-50 border-t border-zinc-200 bg-white
-                 pb-[env(safe-area-inset-bottom)] dark:border-zinc-800 dark:bg-black"
+      className="fixed bottom-0 left-0 right-0 z-50 border-t border-amber-900/10 bg-[var(--panel)]/95
+                 shadow-[0_-4px_16px_rgba(0,0,0,0.08)] backdrop-blur pb-[env(safe-area-inset-bottom)]
+                 dark:border-amber-400/10"
     >
       <div className="mx-auto flex max-w-md">
         {navItems.map((item) => {
@@ -19,15 +20,18 @@ export default function BottomNav() {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex flex-1 flex-col items-center gap-1 py-2 text-xs
+              className={`relative flex flex-1 flex-col items-center gap-1 py-2 text-xs transition-colors
                 ${
                   isActive
-                    ? "text-zinc-950 dark:text-white"
+                    ? "text-amber-600 dark:text-amber-400"
                     : "text-zinc-400 dark:text-zinc-500"
                 }`}
             >
-              <span className="text-xl">{item.emoji}</span>
-              <span>{item.label}</span>
+              {isActive && (
+                <span className="absolute top-0 h-0.5 w-8 rounded-full bg-amber-500 dark:bg-amber-400" />
+              )}
+              <span className={`text-xl transition-transform ${isActive ? "scale-110" : ""}`}>{item.emoji}</span>
+              <span className="font-medium">{item.label}</span>
             </Link>
           );
         })}

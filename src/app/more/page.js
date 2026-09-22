@@ -17,6 +17,8 @@ import { emptyGuildTownBonuses } from "@/config/guildTown";
 import { worldBossLords } from "@/config/worldBoss";
 import { fetchDefeatedLordIds } from "@/lib/worldBoss";
 import { guildNewsCategories, getDefaultNewsFilters } from "@/config/guildNews";
+import { fetchMailbox, claimMail } from "@/lib/mailbox";
+import { submitBugReport, fetchMyBugReports } from "@/lib/bugReports";
 
 const moreTabs = [
   { id: "quests", label: "퀘스트" },
@@ -24,6 +26,8 @@ const moreTabs = [
   { id: "achievements", label: "업적" },
   { id: "titles", label: "칭호" },
   { id: "chronicle", label: "연대기" },
+  { id: "mailbox", label: "우편함" },
+  { id: "bugReport", label: "버그 제보" },
 ];
 
 export default function MorePage() {
@@ -39,6 +43,12 @@ export default function MorePage() {
   const [claimBusy, setClaimBusy] = useState(false);
   const [guildTownBonuses, setGuildTownBonuses] = useState(emptyGuildTownBonuses);
   const [defeatedLordIds, setDefeatedLordIds] = useState(new Set());
+  const [mailbox, setMailbox] = useState([]);
+  const [mailBusy, setMailBusy] = useState(null);
+  const [mailResult, setMailResult] = useState(null);
+  const [bugMessage, setBugMessage] = useState("");
+  const [bugSubmitting, setBugSubmitting] = useState(false);
+  const [myBugReports, setMyBugReports] = useState([]);
 
   useEffect(() => {
     if (!character?.user_id) return;
@@ -48,6 +58,8 @@ export default function MorePage() {
       .then(setGuildTownBonuses)
       .catch(() => setGuildTownBonuses(emptyGuildTownBonuses));
     fetchDefeatedLordIds(character.user_id).then(setDefeatedLordIds);
+    fetchMailbox(character.user_id).then(setMailbox);
+    fetchMyBugReports(character.user_id).then(setMyBugReports);
   }, [character?.user_id]);
 
   function openConfirm() {
@@ -114,6 +126,7 @@ export default function MorePage() {
     .map((region, index) => ({ region, index }))
     .filter(({ index }) => unlockedRegionIndex > index);
   const lordStories = worldBossLords.filter((lord) => defeatedLordIds.has(lord.id));
+  const unclaimedMailCount = mailbox.filter((mail) => !mail.claimed).length;
   const newsFilters = { ...getDefaultNewsFilters(), ...(progress.newsFilters ?? {}) };
 
   async function updateProgress(updater) {
@@ -167,6 +180,36 @@ export default function MorePage() {
     await updateProgress((p) => ({ ...p, newsFilters: current }));
   }
 
+  async function handleClaimMail(mail) {
+    if (mailBusy) return;
+    setMailBusy(mail.id);
+    const { result, error } = await claimMail(mail.id);
+    if (error) {
+      console.error("우편 수령 실패:", error.message);
+      setMailBusy(null);
+      return;
+    }
+    setMailResult(
+      `+${formatNumber(result.reward_gold)}G · 🔩${formatNumber(result.reward_stones)} · 💎${formatNumber(result.reward_soul_stones)} 수령했습니다!`
+    );
+    setTimeout(() => setMailResult(null), 3000);
+    await refreshCharacter();
+    fetchMailbox(character.user_id).then(setMailbox);
+    setMailBusy(null);
+  }
+
+  async function handleSubmitBugReport(e) {
+    e.preventDefault();
+    if (bugSubmitting || !bugMessage.trim()) return;
+    setBugSubmitting(true);
+    const { error } = await submitBugReport(character.user_id, character.nickname, bugMessage);
+    if (!error) {
+      setBugMessage("");
+      fetchMyBugReports(character.user_id).then(setMyBugReports);
+    }
+    setBugSubmitting(false);
+  }
+
   return (
     <div className="flex flex-col gap-4 px-6 py-8">
       <div className="flex gap-1.5 overflow-x-auto pb-1">
@@ -175,13 +218,16 @@ export default function MorePage() {
             key={tab.id}
             type="button"
             onClick={() => setActiveTab(tab.id)}
-            className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium whitespace-nowrap ${
+            className={`relative shrink-0 rounded-full px-3 py-1.5 text-xs font-medium whitespace-nowrap ${
               activeTab === tab.id
                 ? "bg-zinc-950 text-white dark:bg-white dark:text-zinc-950"
                 : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
             }`}
           >
             {tab.label}
+            {tab.id === "mailbox" && unclaimedMailCount > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-red-500" />
+            )}
           </button>
         ))}
       </div>
@@ -419,6 +465,92 @@ export default function MorePage() {
                       {lord.emoji} {lord.name}
                     </p>
                     <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{lord.story}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "mailbox" && (
+        <div className="flex flex-col gap-2">
+          {mailResult && (
+            <p className="rounded-lg bg-emerald-100 px-4 py-2 text-center text-sm font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+              {mailResult}
+            </p>
+          )}
+          {mailbox.length === 0 ? (
+            <p className="text-center text-sm text-zinc-400">받은 우편이 없습니다.</p>
+          ) : (
+            mailbox.map((mail) => (
+              <div key={mail.id} className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-zinc-950 dark:text-white">{mail.title}</p>
+                  <p className="text-xs text-zinc-400">{new Date(mail.created_at).toLocaleDateString()}</p>
+                </div>
+                {mail.message && (
+                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{mail.message}</p>
+                )}
+                <p className="mt-2 text-xs text-amber-500">
+                  {mail.reward_gold > 0 && `+${formatNumber(mail.reward_gold)}G `}
+                  {mail.reward_stones > 0 && `🔩+${formatNumber(mail.reward_stones)} `}
+                  {mail.reward_soul_stones > 0 && `💎+${formatNumber(mail.reward_soul_stones)}`}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleClaimMail(mail)}
+                  disabled={mail.claimed || mailBusy === mail.id}
+                  className="mt-2 w-full rounded-lg bg-zinc-950 py-2 text-xs font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+                >
+                  {mail.claimed ? "수령 완료" : "수령하기"}
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {activeTab === "bugReport" && (
+        <div className="flex flex-col gap-4">
+          <form onSubmit={handleSubmitBugReport} className="flex flex-col gap-2">
+            <textarea
+              value={bugMessage}
+              onChange={(e) => setBugMessage(e.target.value)}
+              placeholder="어떤 버그를 발견하셨나요? 화면, 상황을 자세히 적어주시면 도움이 됩니다."
+              maxLength={1000}
+              rows={4}
+              className="rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+            <button
+              type="submit"
+              disabled={bugSubmitting || !bugMessage.trim()}
+              className="w-full rounded-lg bg-zinc-950 py-2.5 text-sm font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+            >
+              {bugSubmitting ? "제출 중..." : "제보하기"}
+            </button>
+          </form>
+
+          <div>
+            <h2 className="mb-2 text-sm font-semibold text-zinc-950 dark:text-white">내가 제보한 내역</h2>
+            {myBugReports.length === 0 ? (
+              <p className="text-center text-sm text-zinc-400">아직 제보한 내용이 없습니다.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {myBugReports.map((report) => (
+                  <div key={report.id} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-sky-500">{report.status}</span>
+                      <span className="text-xs text-zinc-400">
+                        {new Date(report.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">{report.message}</p>
+                    {report.admin_response && (
+                      <p className="mt-2 rounded-lg bg-zinc-100 p-2 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                        💬 {report.admin_response}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
