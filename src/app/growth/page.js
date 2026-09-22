@@ -7,6 +7,19 @@ import { supabase } from "@/lib/supabaseClient";
 import { formatNumber } from "@/lib/format";
 import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import {
+  getJobSkills,
+  getSkillEnhanceCost,
+  getSkillMultiplier,
+  maxSkillLevel,
+} from "@/config/skills";
+import {
+  traitBranches,
+  traitStartLevel,
+  traitResetCost,
+  getTotalTraitPoints,
+  getUsedTraitPoints,
+} from "@/config/traits";
+import {
   getTotalAttack,
   getEnhanceAttackBonus,
   getEnhanceTotalCost,
@@ -19,6 +32,8 @@ export default function GrowthPage() {
   const [count, setCount] = useState(enhanceBatchOptions[0]);
   const [enhancing, setEnhancing] = useState(false);
   const [equipAttackBonus, setEquipAttackBonus] = useState(0);
+  const [traitBusy, setTraitBusy] = useState(false);
+  const [skillBusyId, setSkillBusyId] = useState(null);
   const enhancingRef = useRef(false);
 
   // 탭을 급하게 오갈 때 골드가 옛날 값으로 보이는 걸 줄이기 위해,
@@ -51,6 +66,14 @@ export default function GrowthPage() {
   const currentAttack = getTotalAttack(character.job, character.level, enhanceLevel) + equipAttackBonus;
   const nextAttack = getTotalAttack(character.job, character.level, enhanceLevel + count) + equipAttackBonus;
   const canAfford = gold >= totalCost;
+  const skills = getJobSkills(character.job);
+  const stones = progress.enhancementStones ?? 0;
+  const skillLevels = progress.skillLevels ?? {};
+
+  const traits = progress.traits ?? { attack: 0, survival: 0, luck: 0 };
+  const totalTraitPoints = getTotalTraitPoints(character.level);
+  const usedTraitPoints = getUsedTraitPoints(traits);
+  const availableTraitPoints = totalTraitPoints - usedTraitPoints;
 
   async function handleEnhance() {
     // 응답이 오기 전에 버튼이 한 번 더 눌리는 걸 확실히 막는다 (ref는 즉시 반영되어 중복 클릭에 안전함).
@@ -72,6 +95,52 @@ export default function GrowthPage() {
     await refreshCharacter();
     enhancingRef.current = false;
     setEnhancing(false);
+  }
+
+  async function handleAddTraitPoint(branchId, amount) {
+    if (traitBusy || availableTraitPoints <= 0) return;
+    const pointsToAdd = Math.min(amount, availableTraitPoints);
+    setTraitBusy(true);
+    const nextTraits = { ...traits, [branchId]: (traits[branchId] ?? 0) + pointsToAdd };
+    await supabase
+      .from("characters")
+      .update({ progress: { ...progress, traits: nextTraits } })
+      .eq("user_id", character.user_id);
+    await refreshCharacter();
+    setTraitBusy(false);
+  }
+
+  async function handleEnhanceSkill(skillId) {
+    const currentLevel = skillLevels[skillId] ?? 0;
+    const cost = getSkillEnhanceCost(currentLevel);
+    if (skillBusyId || currentLevel >= maxSkillLevel || stones < cost) return;
+    setSkillBusyId(skillId);
+    const nextSkillLevels = { ...skillLevels, [skillId]: currentLevel + 1 };
+    await supabase
+      .from("characters")
+      .update({
+        progress: { ...progress, enhancementStones: stones - cost, skillLevels: nextSkillLevels },
+      })
+      .eq("user_id", character.user_id);
+    await refreshCharacter();
+    setSkillBusyId(null);
+  }
+
+  async function handleResetTraits() {
+    if (traitBusy || usedTraitPoints === 0 || gold < traitResetCost) return;
+    setTraitBusy(true);
+    await supabase
+      .from("characters")
+      .update({
+        progress: {
+          ...progress,
+          gold: gold - traitResetCost,
+          traits: { attack: 0, survival: 0, luck: 0 },
+        },
+      })
+      .eq("user_id", character.user_id);
+    await refreshCharacter();
+    setTraitBusy(false);
   }
 
   return (
@@ -152,8 +221,106 @@ export default function GrowthPage() {
         )}
       </div>
 
+      {/* 자동 발동 스킬 (전투 중 쿨타임마다 저절로 발동됨) */}
+      <div className="rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
+        <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">자동 발동 스킬</h2>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          모험 중 쿨타임마다 저절로 발동됩니다. 공격력이 오르면 스킬 피해도 같이 강해집니다.
+        </p>
+        <p className="mt-2 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+          <span>보유 강화석</span>
+          <span className="font-semibold text-zinc-950 dark:text-white">🔩 {formatNumber(stones)}</span>
+        </p>
+        <div className="mt-3 flex flex-col gap-2">
+          {skills.map((skill) => {
+            const level = skillLevels[skill.id] ?? 0;
+            const cost = getSkillEnhanceCost(level);
+            const isMax = level >= maxSkillLevel;
+            return (
+              <div key={skill.id} className="rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-950 dark:text-white">
+                    {skill.emoji} {skill.name}
+                    {level > 0 && <span className="ml-1 text-sky-500">+{level}</span>}
+                  </span>
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                    쿨타임 {skill.cooldown}초 · 공격력 ×{getSkillMultiplier(skill, level).toFixed(2)}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleEnhanceSkill(skill.id)}
+                  disabled={skillBusyId === skill.id || isMax || stones < cost}
+                  className="mt-2 w-full rounded-lg border border-zinc-300 py-1.5 text-xs font-medium text-zinc-700 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+                >
+                  {isMax ? "최대 강화" : `강화하기 (🔩${cost})`}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 특성 트리 */}
+      <div className="rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
+        <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">특성</h2>
+        {character.level < traitStartLevel ? (
+          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+            레벨 {traitStartLevel}부터 특성 포인트를 얻습니다. (현재 Lv.{character.level})
+          </p>
+        ) : (
+          <>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              남은 포인트: {availableTraitPoints} / {totalTraitPoints}
+            </p>
+            <div className="mt-3 flex flex-col gap-2">
+              {traitBranches.map((branch) => (
+                <div
+                  key={branch.id}
+                  className="flex items-center justify-between rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900"
+                >
+                  <div>
+                    <p className="text-zinc-950 dark:text-white">
+                      {branch.emoji} {branch.label}{" "}
+                      <span className="font-semibold text-sky-500">{traits[branch.id] ?? 0}</span>
+                    </p>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{branch.description}</p>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleAddTraitPoint(branch.id, 1)}
+                      disabled={traitBusy || availableTraitPoints <= 0}
+                      className="rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+                    >
+                      +1
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAddTraitPoint(branch.id, 10)}
+                      disabled={traitBusy || availableTraitPoints <= 0}
+                      className="rounded-lg bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+                    >
+                      +10
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={handleResetTraits}
+              disabled={traitBusy || usedTraitPoints === 0 || gold < traitResetCost}
+              className="mt-3 w-full rounded-lg border border-zinc-300 py-2 text-xs font-medium text-zinc-700 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+            >
+              특성 초기화 ({formatNumber(traitResetCost)} G)
+            </button>
+          </>
+        )}
+      </div>
+
       <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        스킬, 특성, 전직, 환생은 다음 단계들에서 추가될 예정입니다.
+        전직, 환생은 다음 단계들에서 추가될 예정입니다.
       </p>
     </div>
   );

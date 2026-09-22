@@ -13,6 +13,8 @@ import DropToast from "@/components/DropToast";
 import { regions } from "@/config/regions";
 import { rollEquipmentDrop } from "@/config/equipment";
 import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
+import { getJobSkills, getSkillMultiplier } from "@/config/skills";
+import { getTraitBonuses } from "@/config/traits";
 import {
   jobBattleStats,
   getTotalAttack,
@@ -28,6 +30,7 @@ import {
 } from "@/config/balance";
 
 const emptyEquipBonuses = { attackFlat: 0, critRate: 0, critDamage: 0, goldFind: 0 };
+const emptyTraitBonuses = { attackPercent: 0, attackSpeedPercent: 0, goldFindPercent: 0, dropChancePercent: 0 };
 
 function initialMonsterState(regionIndex, stage) {
   const hp = getStageMonsterHp(regionIndex, stage);
@@ -46,6 +49,7 @@ const initialBattleState = {
   regionStage: regions.map(() => 1),
   unlockedRegionIndex: 0,
   equipBonuses: emptyEquipBonuses,
+  traitBonuses: emptyTraitBonuses,
   ...initialMonsterState(0, 1),
 };
 
@@ -64,9 +68,11 @@ function applyHit(state, damage) {
 
   let level = state.level;
   let exp = state.exp + reward.exp;
-  const goldMultiplier = 1 + (state.equipBonuses?.goldFind ?? 0) / 100;
+  const equipBonuses = state.equipBonuses ?? emptyEquipBonuses;
+  const traitBonuses = state.traitBonuses ?? emptyTraitBonuses;
+  const goldMultiplier = 1 + (equipBonuses.goldFind + traitBonuses.goldFindPercent) / 100;
   const gold = state.gold + Math.round(reward.gold * goldMultiplier);
-  const droppedItem = rollEquipmentDrop(regions[state.regionIndex]?.id);
+  const droppedItem = rollEquipmentDrop(regions[state.regionIndex]?.id, traitBonuses.dropChancePercent);
 
   let expToNext = getExpToNextLevel(level);
   while (exp >= expToNext) {
@@ -116,7 +122,7 @@ async function saveProgress(character, battle) {
     .update({
       level: battle.level,
       progress: {
-        // 가방 탭의 강화석처럼, 모험 탭이 다루지 않는 값들은 그대로 보존한다.
+        // 가방 탭의 강화석, 성장 탭의 특성처럼, 모험 탭이 다루지 않는 값들은 그대로 보존한다.
         ...(character.progress ?? {}),
         exp: battle.exp,
         gold: battle.gold,
@@ -136,6 +142,7 @@ export default function AdventurePage() {
   const job = character ? getJob(character.job) : null;
 
   const [battle, setBattle] = useState(initialBattleState);
+  const [ready, setReady] = useState(false);
   const [floatingNumbers, setFloatingNumbers] = useState([]);
   const [shake, setShake] = useState(false);
   const [showLevelUp, setShowLevelUp] = useState(false);
@@ -149,6 +156,7 @@ export default function AdventurePage() {
   const battleRef = useRef(battle);
   const hitCounterRef = useRef(0);
   const bossFightingRef = useRef(false);
+  const skillLastTriggeredRef = useRef({});
 
   // 캐릭터 정보가 도착하면, 저장되어 있던 값으로 전투 상태를 한 번만 채운다.
   // (방치 보상 계산은 로그인 시점에 AuthContext에서 이미 끝난 상태로 넘어온다)
@@ -170,6 +178,8 @@ export default function AdventurePage() {
         isElite: false,
         regionStage,
         unlockedRegionIndex: progress.unlockedRegionIndex ?? 0,
+        traitBonuses: getTraitBonuses(progress.traits),
+        skillLevels: progress.skillLevels ?? {},
       };
 
       // 장비 보너스를 불러오다 문제가 생기더라도, 레벨/골드 같은 진짜 캐릭터 정보는
@@ -184,79 +194,131 @@ export default function AdventurePage() {
           };
           battleRef.current = state;
           setBattle(state);
+          setReady(true);
         });
     }
   }, [character]);
 
-  // 자동 공격 타이머. 데미지 계산, 화면 효과, 레벨업 저장까지 여기서 한 번에 처리한다.
+  // 공격 한 번(일반 공격이든 스킬이든)의 결과 처리를 한곳에 모아둔다.
+  function processHit({ damage, isCrit, label, color }) {
+    const current = battleRef.current;
+    const next = applyHit(current, damage);
+    battleRef.current = next;
+    setBattle(next);
+
+    const hitId = ++hitCounterRef.current;
+    setFloatingNumbers((prev) => [...prev, { id: hitId, damage, isCrit, label, color }]);
+    setTimeout(() => {
+      setFloatingNumbers((prev) => prev.filter((n) => n.id !== hitId));
+    }, 900);
+
+    setAttacking(true);
+    setTimeout(() => setAttacking(false), 250);
+    setMonsterHurt(true);
+    setTimeout(() => setMonsterHurt(false), 250);
+
+    if (isCrit) {
+      setShake(true);
+      setTimeout(() => setShake(false), 300);
+    }
+
+    if (next.droppedItem) {
+      const drop = next.droppedItem;
+      const dropId = ++hitCounterRef.current;
+      supabase
+        .from("equipment")
+        .insert({
+          user_id: character.user_id,
+          slot: drop.slot,
+          grade: drop.grade,
+          options: drop.options,
+          set_id: drop.setId,
+        })
+        .then(({ error }) => {
+          if (error) {
+            console.error("장비 저장 실패:", error.message);
+            return;
+          }
+          setDrops((prev) => [...prev, { id: dropId, slot: drop.slot, grade: drop.grade }]);
+          setTimeout(() => {
+            setDrops((prev) => prev.filter((d) => d.id !== dropId));
+          }, 3000);
+        });
+    }
+
+    if (next.level > current.level) {
+      setShowLevelUp(true);
+      setTimeout(() => setShowLevelUp(false), 1500);
+      saveProgress(character, next).then(() => refreshCharacter());
+    }
+  }
+
+  // 자동 공격 타이머. 장비/특성 정보까지 다 불러온 뒤(ready)에 시작해야
+  // 공격 속도에 특성 보너스가 정확히 반영된다.
   useEffect(() => {
-    if (!character) return;
+    if (!character || !ready) return;
     const stats = jobBattleStats[character.job] ?? jobBattleStats.warrior;
-    const intervalMs = 1000 / stats.attackSpeed;
+    const traitBonuses = battleRef.current.traitBonuses ?? emptyTraitBonuses;
+    const attackSpeed = stats.attackSpeed * (1 + traitBonuses.attackSpeedPercent / 100);
+    const intervalMs = 1000 / attackSpeed;
 
     const timer = setInterval(() => {
-      if (!loadedRef.current || bossFightingRef.current) return;
+      if (bossFightingRef.current) return;
       const current = battleRef.current;
       const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
-      const attack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
+      const tb = current.traitBonuses ?? emptyTraitBonuses;
+      const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
+      const attack = baseAttack * (1 + tb.attackPercent / 100);
       const critRate = stats.critRate + equipBonuses.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
       const isCrit = Math.random() < critRate;
       const damage = Math.round(attack * (isCrit ? critDamage : 1));
-      const next = applyHit(current, damage);
-
-      battleRef.current = next;
-      setBattle(next);
-
-      const hitId = ++hitCounterRef.current;
-      setFloatingNumbers((prev) => [...prev, { id: hitId, damage, isCrit }]);
-      setTimeout(() => {
-        setFloatingNumbers((prev) => prev.filter((n) => n.id !== hitId));
-      }, 900);
-
-      setAttacking(true);
-      setTimeout(() => setAttacking(false), 250);
-      setMonsterHurt(true);
-      setTimeout(() => setMonsterHurt(false), 250);
-
-      if (isCrit) {
-        setShake(true);
-        setTimeout(() => setShake(false), 300);
-      }
-
-      if (next.droppedItem) {
-        const drop = next.droppedItem;
-        const dropId = ++hitCounterRef.current;
-        supabase
-          .from("equipment")
-          .insert({
-            user_id: character.user_id,
-            slot: drop.slot,
-            grade: drop.grade,
-            options: drop.options,
-            set_id: drop.setId,
-          })
-          .then(({ error }) => {
-            if (error) {
-              console.error("장비 저장 실패:", error.message);
-              return;
-            }
-            setDrops((prev) => [...prev, { id: dropId, slot: drop.slot, grade: drop.grade }]);
-            setTimeout(() => {
-              setDrops((prev) => prev.filter((d) => d.id !== dropId));
-            }, 3000);
-          });
-      }
-
-      if (next.level > current.level) {
-        setShowLevelUp(true);
-        setTimeout(() => setShowLevelUp(false), 1500);
-        saveProgress(character, next).then(() => refreshCharacter());
-      }
+      processHit({ damage, isCrit });
     }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [character?.job, character?.user_id, character, refreshCharacter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [character?.job, character?.user_id, ready]);
+
+  // 스킬 자동 발동. 짧은 간격으로 깨어나서, 쿨타임이 다 찬 스킬이 있으면 터뜨린다.
+  useEffect(() => {
+    if (!character || !ready) return;
+    const skills = getJobSkills(character.job);
+    if (skills.length === 0) return;
+
+    const startedAt = Date.now();
+    for (const skill of skills) {
+      skillLastTriggeredRef.current[skill.id] = startedAt;
+    }
+
+    const timer = setInterval(() => {
+      if (bossFightingRef.current) return;
+      const current = battleRef.current;
+      const stats = jobBattleStats[character.job] ?? jobBattleStats.warrior;
+      const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
+      const tb = current.traitBonuses ?? emptyTraitBonuses;
+      const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
+      const attack = baseAttack * (1 + tb.attackPercent / 100);
+      const critRate = stats.critRate + equipBonuses.critRate / 100;
+      const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
+
+      const now = Date.now();
+      for (const skill of skills) {
+        const last = skillLastTriggeredRef.current[skill.id] ?? 0;
+        if (now - last >= skill.cooldown * 1000) {
+          skillLastTriggeredRef.current[skill.id] = now;
+          const skillLevel = current.skillLevels?.[skill.id] ?? 0;
+          const multiplier = getSkillMultiplier(skill, skillLevel);
+          const isCrit = Math.random() < critRate;
+          const damage = Math.round(attack * multiplier * (isCrit ? critDamage : 1));
+          processHit({ damage, isCrit, label: skill.name, color: "#a855f7" });
+        }
+      }
+    }, 250);
+
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [character?.job, character?.user_id, ready]);
 
   // 화면을 나갈 때(다른 탭 이동 등) 지금까지 진행 상황을 저장하고,
   // 다른 탭(성장 등)에서도 최신 골드/레벨을 볼 수 있게 캐릭터 정보를 새로고침한다.
@@ -327,7 +389,9 @@ export default function AdventurePage() {
       expToNext = getExpToNextLevel(level);
     }
 
-    const goldMultiplier = 1 + (current.equipBonuses?.goldFind ?? 0) / 100;
+    const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
+    const traitBonuses = current.traitBonuses ?? emptyTraitBonuses;
+    const goldMultiplier = 1 + (equipBonuses.goldFind + traitBonuses.goldFindPercent) / 100;
     const bossGold = Math.round(reward.gold * goldMultiplier);
 
     const next = {
@@ -371,7 +435,10 @@ export default function AdventurePage() {
 
   const expToNext = getExpToNextLevel(battle.level);
   const equipBonuses = battle.equipBonuses ?? emptyEquipBonuses;
-  const attack = getTotalAttack(character.job, battle.level, battle.enhanceLevel) + equipBonuses.attackFlat;
+  const traitBonuses = battle.traitBonuses ?? emptyTraitBonuses;
+  const attack =
+    (getTotalAttack(character.job, battle.level, battle.enhanceLevel) + equipBonuses.attackFlat) *
+    (1 + traitBonuses.attackPercent / 100);
   const region = regions[battle.regionIndex];
   const monsterInfo = region.monsters[battle.killIndexInStage % region.monsters.length];
   const isBossReady = battle.stage >= stagesPerRegion;
@@ -473,11 +540,14 @@ export default function AdventurePage() {
             {floatingNumbers.map((n) => (
               <span
                 key={n.id}
-                className={`dmg-number ${
-                  n.isCrit ? "text-2xl text-yellow-300" : "text-base text-white"
-                }`}
-                style={{ top: n.isCrit ? "-10px" : "0px", textShadow: "0 1px 3px rgba(0,0,0,0.6)" }}
+                className={`dmg-number ${n.isCrit ? "text-2xl" : "text-base"}`}
+                style={{
+                  top: n.isCrit ? "-24px" : "0px",
+                  color: n.color ?? (n.isCrit ? "#fde047" : "#ffffff"),
+                  textShadow: "0 1px 3px rgba(0,0,0,0.6)",
+                }}
               >
+                {n.label ? `${n.label} ` : ""}
                 {formatNumber(n.damage)}
               </span>
             ))}

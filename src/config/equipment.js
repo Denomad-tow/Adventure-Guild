@@ -125,8 +125,9 @@ function rollOptions(gradeId) {
 
 // 몬스터를 잡았을 때 장비가 나올지, 나온다면 어떤 장비인지 결정한다.
 // setId는 어느 지역에서 잡았는지로 정해진다 (그 지역 테마의 장비 세트로 표시됨).
-export function rollEquipmentDrop(setId) {
-  if (Math.random() >= equipDropChance) return null;
+// bonusDropChance는 행운 특성 등으로 늘어난 드랍 확률(%포인트)이다.
+export function rollEquipmentDrop(setId, bonusDropChance = 0) {
+  if (Math.random() >= equipDropChance + bonusDropChance / 100) return null;
   const slot = equipmentSlots[Math.floor(Math.random() * equipmentSlots.length)].id;
   const grade = rollGrade();
   const options = rollOptions(grade);
