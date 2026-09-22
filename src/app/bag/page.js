@@ -22,6 +22,7 @@ import {
   enhanceFailureStartLevel,
 } from "@/config/equipment";
 import { getElement } from "@/config/elements";
+import { postGuildNews } from "@/lib/guildNews";
 
 const rareOrBelowIndex = getGradeIndex("rare");
 const defaultBulkGrades = grades.filter((g) => getGradeIndex(g.id) <= rareOrBelowIndex).map((g) => g.id);
@@ -158,6 +159,14 @@ export default function BagPage() {
     setEnhanceResult({ success });
     setTimeout(() => setEnhanceResult(null), 2000);
     setBusy(false);
+
+    if (!success && currentLevel >= enhanceFailureStartLevel) {
+      postGuildNews(
+        character.user_id,
+        character.nickname,
+        `${character.nickname}님이 강화 +${currentLevel + 1}에 실패했습니다... 😢`
+      );
+    }
   }
 
   async function handleBulkDisassemble() {

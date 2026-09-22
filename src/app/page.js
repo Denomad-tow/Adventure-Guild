@@ -16,6 +16,7 @@ import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import { getJobSkills, getSkillMultiplier } from "@/config/skills";
 import { getTraitBonuses } from "@/config/traits";
 import { hasElementAdvantage, elementAdvantageMultiplier, getElement } from "@/config/elements";
+import { postGuildNews } from "@/lib/guildNews";
 import {
   merchantCheckIntervalMs,
   merchantChancePerCheck,
@@ -266,6 +267,16 @@ export default function AdventurePage() {
           setTimeout(() => {
             setDrops((prev) => prev.filter((d) => d.id !== dropId));
           }, 3000);
+
+          if (drop.grade === "legendary" || drop.grade === "mythic") {
+            const gradeLabel = getGrade(drop.grade).label;
+            const slotLabel = getSlot(drop.slot).label;
+            postGuildNews(
+              character.user_id,
+              character.nickname,
+              `${character.nickname}님이 ${gradeLabel} 장비 [${slotLabel}]을 획득했습니다!`
+            );
+          }
         });
     }
 
@@ -547,6 +558,14 @@ export default function AdventurePage() {
       exp: reward.exp,
       justUnlockedNext,
     });
+
+    if (justUnlockedNext) {
+      postGuildNews(
+        character.user_id,
+        character.nickname,
+        `${character.nickname}님이 ${regions[nextRegionIndex].name}을 개척했습니다!`
+      );
+    }
 
     await saveProgress(character, next);
     await refreshCharacter();

@@ -21,3 +21,15 @@ export function formatDuration(seconds) {
   if (minutes > 0) return `${minutes}분`;
   return "잠깐";
 }
+
+// 날짜/시각을 "3분 전", "2시간 전" 같은 상대 시간으로 보여준다.
+export function formatRelativeTime(dateString) {
+  const diffSeconds = Math.floor((Date.now() - new Date(dateString).getTime()) / 1000);
+  if (diffSeconds < 60) return "방금 전";
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) return `${diffMinutes}분 전`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}시간 전`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}일 전`;
+}
