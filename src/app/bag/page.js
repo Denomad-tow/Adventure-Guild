@@ -21,6 +21,7 @@ import {
   maxItemEnhanceLevel,
   enhanceFailureStartLevel,
 } from "@/config/equipment";
+import { getElement } from "@/config/elements";
 
 const rareOrBelowIndex = getGradeIndex("rare");
 const defaultBulkGrades = grades.filter((g) => getGradeIndex(g.id) <= rareOrBelowIndex).map((g) => g.id);
@@ -209,6 +210,11 @@ export default function BagPage() {
                   </span>
                 )}
                 <span className="text-2xl">{slot.emoji}</span>
+                {item?.element && (
+                  <span className="absolute bottom-1 left-1 text-xs">
+                    {getElement(item.element)?.emoji}
+                  </span>
+                )}
                 <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
                   {grade ? grade.label : slot.label}
                 </span>
@@ -347,6 +353,11 @@ export default function BagPage() {
                     </span>
                   )}
                   <span className="text-2xl">{slot.emoji}</span>
+                  {item.element && (
+                    <span className="absolute bottom-1 left-1 text-xs">
+                      {getElement(item.element)?.emoji}
+                    </span>
+                  )}
                   <span className="text-[10px] font-medium" style={{ color: grade.color }}>
                     {grade.label}
                   </span>
@@ -377,6 +388,11 @@ export default function BagPage() {
                 {selectedItem.set_id && getEquipmentSet(selectedItem.set_id) && (
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">
                     {getEquipmentSet(selectedItem.set_id).name}
+                  </p>
+                )}
+                {selectedItem.element && (
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    속성: {getElement(selectedItem.element)?.emoji} {selectedItem.element}
                   </p>
                 )}
                 {selectedItem.equipped && (

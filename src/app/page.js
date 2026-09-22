@@ -15,6 +15,7 @@ import { rollEquipmentDrop, rollMerchantItem, getMerchantPrice, getGrade, getSlo
 import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import { getJobSkills, getSkillMultiplier } from "@/config/skills";
 import { getTraitBonuses } from "@/config/traits";
+import { hasElementAdvantage, elementAdvantageMultiplier, getElement } from "@/config/elements";
 import {
   merchantCheckIntervalMs,
   merchantChancePerCheck,
@@ -40,7 +41,7 @@ import {
   eliteMultiplier,
 } from "@/config/balance";
 
-const emptyEquipBonuses = { attackFlat: 0, critRate: 0, critDamage: 0, goldFind: 0 };
+const emptyEquipBonuses = { attackFlat: 0, critRate: 0, critDamage: 0, goldFind: 0, weaponElement: null };
 const emptyTraitBonuses = { attackPercent: 0, attackSpeedPercent: 0, goldFindPercent: 0, dropChancePercent: 0 };
 
 function initialMonsterState(regionIndex, stage) {
@@ -254,6 +255,7 @@ export default function AdventurePage() {
           grade: drop.grade,
           options: drop.options,
           set_id: drop.setId,
+          element: drop.element,
         })
         .then(({ error }) => {
           if (error) {
@@ -289,7 +291,11 @@ export default function AdventurePage() {
       const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
       const tb = current.traitBonuses ?? emptyTraitBonuses;
       const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
-      const attack = baseAttack * (1 + tb.attackPercent / 100);
+      let attack = baseAttack * (1 + tb.attackPercent / 100);
+      const region = regions[current.regionIndex];
+      if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
+        attack *= elementAdvantageMultiplier;
+      }
       const critRate = stats.critRate + equipBonuses.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
       const isCrit = Math.random() < critRate;
@@ -319,7 +325,11 @@ export default function AdventurePage() {
       const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
       const tb = current.traitBonuses ?? emptyTraitBonuses;
       const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
-      const attack = baseAttack * (1 + tb.attackPercent / 100);
+      let attack = baseAttack * (1 + tb.attackPercent / 100);
+      const region = regions[current.regionIndex];
+      if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
+        attack *= elementAdvantageMultiplier;
+      }
       const critRate = stats.critRate + equipBonuses.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
 
@@ -399,6 +409,7 @@ export default function AdventurePage() {
       grade: merchant.item.grade,
       options: merchant.item.options,
       set_id: merchant.item.setId,
+      element: merchant.item.element,
     });
     if (error) {
       console.error("상인 장비 구매 실패:", error.message);
@@ -553,10 +564,12 @@ export default function AdventurePage() {
   const expToNext = getExpToNextLevel(battle.level);
   const equipBonuses = battle.equipBonuses ?? emptyEquipBonuses;
   const traitBonuses = battle.traitBonuses ?? emptyTraitBonuses;
+  const region = regions[battle.regionIndex];
+  const hasAdvantage = hasElementAdvantage(equipBonuses.weaponElement, region.element);
   const attack =
     (getTotalAttack(character.job, battle.level, battle.enhanceLevel) + equipBonuses.attackFlat) *
-    (1 + traitBonuses.attackPercent / 100);
-  const region = regions[battle.regionIndex];
+    (1 + traitBonuses.attackPercent / 100) *
+    (hasAdvantage ? elementAdvantageMultiplier : 1);
   const monsterInfo = region.monsters[battle.killIndexInStage % region.monsters.length];
   const isBossReady = battle.stage >= stagesPerRegion;
 
@@ -603,6 +616,22 @@ export default function AdventurePage() {
       <div className="flex items-center justify-between rounded-lg bg-zinc-100 px-4 py-2 text-sm dark:bg-zinc-900">
         <span className="text-zinc-500 dark:text-zinc-400">보유 골드</span>
         <span className="font-semibold text-amber-500">{formatNumber(battle.gold)} G</span>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg bg-zinc-100 px-4 py-2 text-sm dark:bg-zinc-900">
+        <span className="text-zinc-500 dark:text-zinc-400">
+          내 무기 속성{" "}
+          {equipBonuses.weaponElement
+            ? `${getElement(equipBonuses.weaponElement)?.emoji ?? ""} ${equipBonuses.weaponElement}`
+            : "없음"}
+          {" · "}
+          이 지역 속성 {getElement(region.element)?.emoji ?? ""} {region.element}
+        </span>
+        {hasAdvantage ? (
+          <span className="font-semibold text-emerald-500">상성 우세! 피해 +50%</span>
+        ) : (
+          <span className="text-xs text-zinc-400">상성 없음</span>
+        )}
       </div>
 
       <RegionSelector

@@ -1,4 +1,5 @@
 // 장비 관련 모든 수치를 모아두는 곳. 여기 값만 고치면 드랍률/옵션 세기가 바뀐다.
+import { rollRandomElement } from "@/config/elements";
 
 // 지역마다 테마가 있는 장비 세트 하나씩. 같은 세트를 2개/4개 장착하면 보너스가 붙는다.
 // id는 regions.js의 지역 id와 맞춰서, 그 지역에서 나온 장비가 이 세트로 표시된다.
@@ -20,6 +21,18 @@ export const equipmentSets = [
     name: "늪지 사냥꾼 세트",
     bonus2: { critDamage: 10 },
     bonus4: { attackFlat: 25 },
+  },
+  {
+    id: "canyon",
+    name: "화염 정령 세트",
+    bonus2: { attackFlat: 15 },
+    bonus4: { critDamage: 15 },
+  },
+  {
+    id: "citadel",
+    name: "서리 사냥꾼 세트",
+    bonus2: { critRate: 5 },
+    bonus4: { attackFlat: 35 },
   },
 ];
 
@@ -131,7 +144,9 @@ export function rollEquipmentDrop(setId, bonusDropChance = 0) {
   const slot = equipmentSlots[Math.floor(Math.random() * equipmentSlots.length)].id;
   const grade = rollGrade();
   const options = rollOptions(grade);
-  return { slot, grade, options, setId: setId ?? null };
+  // 무기는 속성을 하나씩 지니고 있어서, 지역 속성에 맞춰 무기를 바꿔 낄 수 있다.
+  const element = slot === "weapon" ? rollRandomElement() : null;
+  return { slot, grade, options, setId: setId ?? null, element };
 }
 
 export function getDisassembleReward(gradeId) {
@@ -158,7 +173,8 @@ export function rollMerchantItem(minGradeId = "rare") {
   }
   const slot = equipmentSlots[Math.floor(Math.random() * equipmentSlots.length)].id;
   const options = rollOptions(grade);
-  return { slot, grade, options, setId: null };
+  const element = slot === "weapon" ? rollRandomElement() : null;
+  return { slot, grade, options, setId: null, element };
 }
 
 export function getMerchantPrice(gradeId, priceMultiplier) {
@@ -196,6 +212,12 @@ export function getEquipmentStatBonuses(equippedItems) {
   }
 
   return bonuses;
+}
+
+// 장착 중인 무기의 속성을 알려준다 (없으면 null). 지역 속성에 유리하면 피해 +50%.
+export function getEquippedWeaponElement(equippedItems) {
+  const weapon = equippedItems.find((item) => item.slot === "weapon");
+  return weapon?.element ?? null;
 }
 
 // 지금 장착 중인 장비들 기준으로, 어떤 세트가 몇 개 모였고 보너스가 켜졌는지 알려준다. (가방 탭 표시용)

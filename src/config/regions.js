@@ -36,4 +36,28 @@ export const regions = [
     boss: { name: "늪의 마녀 모르가", emoji: "🧙" },
     clearStory: "늪의 마녀 모르가를 물리쳤다. 다음 이야기는 계속됩니다...",
   },
+  {
+    id: "canyon",
+    name: "불꽃 협곡",
+    element: "불",
+    monsters: [
+      { name: "화염 정령", emoji: "🔥" },
+      { name: "오우거", emoji: "👹" },
+      { name: "용암 거북", emoji: "🐢" },
+    ],
+    boss: { name: "화산 거인", emoji: "🌋" },
+    clearStory: "화산 거인이 무너지자 협곡의 열기가 가라앉고, 저 멀리 얼어붙은 성채가 보이기 시작했다.",
+  },
+  {
+    id: "citadel",
+    name: "얼음 성채",
+    element: "물",
+    monsters: [
+      { name: "서리 기사", emoji: "🥶" },
+      { name: "설인", emoji: "⛄" },
+      { name: "아이스 골렘", emoji: "🧊" },
+    ],
+    boss: { name: "아이스 드래곤", emoji: "🐉" },
+    clearStory: "아이스 드래곤을 쓰러뜨렸다. 성채 너머 하늘에 떠 있는 섬이 어렴풋이 보인다.",
+  },
 ];
