@@ -30,6 +30,7 @@ import { getAchievement } from "@/config/achievements";
 import { applyAchievementUnlock } from "@/lib/achievements";
 import { fetchGuildTownBonuses } from "@/lib/guildTown";
 import { emptyGuildTownBonuses } from "@/config/guildTown";
+import { getAdvancedClassBonuses, emptyAdvancedClassBonuses } from "@/config/advancedClasses";
 import {
   merchantCheckIntervalMs,
   merchantChancePerCheck,
@@ -96,7 +97,14 @@ function applyHit(state, damage) {
   const equipBonuses = state.equipBonuses ?? emptyEquipBonuses;
   const traitBonuses = state.traitBonuses ?? emptyTraitBonuses;
   const guildBonuses = state.guildBonuses ?? emptyGuildTownBonuses;
-  const goldMultiplier = 1 + (equipBonuses.goldFind + traitBonuses.goldFindPercent + guildBonuses.treasuryGoldBonusPercent) / 100;
+  const advancedClassBonuses = state.advancedClassBonuses ?? emptyAdvancedClassBonuses;
+  const goldMultiplier =
+    1 +
+    (equipBonuses.goldFind +
+      traitBonuses.goldFindPercent +
+      guildBonuses.treasuryGoldBonusPercent +
+      advancedClassBonuses.goldFindPercent) /
+      100;
   const expMultiplier = 1 + guildBonuses.trainingExpBonusPercent / 100;
   const gold = state.gold + Math.round(reward.gold * goldMultiplier);
   let exp = state.exp + Math.round(reward.exp * expMultiplier);
@@ -284,6 +292,7 @@ export default function AdventurePage() {
         traitBonuses: getTraitBonuses(progress.traits),
         skillLevels: progress.skillLevels ?? {},
         monsterDex: progress.monsterDex ?? {},
+        advancedClassBonuses: getAdvancedClassBonuses(character.job, progress.advancedClass),
       };
 
       // 장비 보너스를 불러오다 문제가 생기더라도, 레벨/골드 같은 진짜 캐릭터 정보는
@@ -412,7 +421,9 @@ export default function AdventurePage() {
     if (!character || !ready) return;
     const stats = jobBattleStats[character.job] ?? jobBattleStats.warrior;
     const traitBonuses = battleRef.current.traitBonuses ?? emptyTraitBonuses;
-    const attackSpeed = stats.attackSpeed * (1 + traitBonuses.attackSpeedPercent / 100);
+    const advancedClassBonuses = battleRef.current.advancedClassBonuses ?? emptyAdvancedClassBonuses;
+    const attackSpeed =
+      stats.attackSpeed * (1 + (traitBonuses.attackSpeedPercent + advancedClassBonuses.attackSpeedPercent) / 100);
     const intervalMs = 1000 / attackSpeed;
 
     const timer = setInterval(() => {
@@ -420,18 +431,19 @@ export default function AdventurePage() {
       const current = battleRef.current;
       const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
       const tb = current.traitBonuses ?? emptyTraitBonuses;
+      const acb = current.advancedClassBonuses ?? emptyAdvancedClassBonuses;
       const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
       let attack = baseAttack * (1 + tb.attackPercent / 100);
       const region = regions[current.regionIndex];
       if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
-        attack *= elementAdvantageMultiplier;
+        attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus;
       }
       if (current.cheerBuffActive) {
         attack *= 1 + cheerBuffAttackPercent / 100;
       }
       attack *= 1 + getDexAttackBonusPercent(current) / 100;
-      const critRate = stats.critRate + equipBonuses.critRate / 100;
-      const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
+      const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100;
+      const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100;
       const isCrit = Math.random() < critRate;
       const damage = Math.round(attack * (isCrit ? critDamage : 1));
       processHit({ damage, isCrit });
@@ -458,23 +470,25 @@ export default function AdventurePage() {
       const stats = jobBattleStats[character.job] ?? jobBattleStats.warrior;
       const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
       const tb = current.traitBonuses ?? emptyTraitBonuses;
+      const acb = current.advancedClassBonuses ?? emptyAdvancedClassBonuses;
       const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
       let attack = baseAttack * (1 + tb.attackPercent / 100);
       const region = regions[current.regionIndex];
       if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
-        attack *= elementAdvantageMultiplier;
+        attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus;
       }
       if (current.cheerBuffActive) {
         attack *= 1 + cheerBuffAttackPercent / 100;
       }
       attack *= 1 + getDexAttackBonusPercent(current) / 100;
-      const critRate = stats.critRate + equipBonuses.critRate / 100;
-      const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
+      const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100;
+      const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100;
 
       const now = Date.now();
       for (const skill of skills) {
         const last = skillLastTriggeredRef.current[skill.id] ?? 0;
-        if (now - last >= skill.cooldown * 1000) {
+        const cooldownMs = skill.cooldown * 1000 * (1 - acb.cooldownReductionPercent / 100);
+        if (now - last >= cooldownMs) {
           skillLastTriggeredRef.current[skill.id] = now;
           const skillLevel = current.skillLevels?.[skill.id] ?? 0;
           const guildBonuses = current.guildBonuses ?? emptyGuildTownBonuses;
@@ -728,6 +742,7 @@ export default function AdventurePage() {
   const expToNext = getExpToNextLevel(battle.level);
   const equipBonuses = battle.equipBonuses ?? emptyEquipBonuses;
   const traitBonuses = battle.traitBonuses ?? emptyTraitBonuses;
+  const advancedClassBonuses = battle.advancedClassBonuses ?? emptyAdvancedClassBonuses;
   const region = regions[battle.regionIndex];
   const hasAdvantage = hasElementAdvantage(equipBonuses.weaponElement, region.element);
   const monsterInfo = region.monsters[battle.killIndexInStage % region.monsters.length];
@@ -738,7 +753,7 @@ export default function AdventurePage() {
   const attack =
     (getTotalAttack(character.job, battle.level, battle.enhanceLevel) + equipBonuses.attackFlat) *
     (1 + traitBonuses.attackPercent / 100) *
-    (hasAdvantage ? elementAdvantageMultiplier : 1) *
+    (hasAdvantage ? elementAdvantageMultiplier + advancedClassBonuses.elementAdvantageBonus : 1) *
     (battle.cheerBuffActive ? 1 + cheerBuffAttackPercent / 100 : 1) *
     (1 + dexBonusPercent / 100);
   const isBossReady = battle.stage >= stagesPerRegion;

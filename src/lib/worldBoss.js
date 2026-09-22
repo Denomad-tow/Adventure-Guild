@@ -53,21 +53,37 @@ export async function fetchContributionBoard(lordIndex) {
 
 // 도전 한 번의 피해량을 계산한다. 실제 전투 화면과 같은 공격력 계산에,
 // 군주별 특수 규칙(탐욕: 골드 보너스, 서리: 공격속도 저주)과 페이즈 이벤트(피해 2배)를 더한다.
-export function computeChallengeDamage({ job, level, enhanceLevel, equipBonuses, traitBonuses, gold, lordIndex, phaseEventActive }) {
+export function computeChallengeDamage({
+  job,
+  level,
+  enhanceLevel,
+  equipBonuses,
+  traitBonuses,
+  advancedClassBonuses,
+  gold,
+  lordIndex,
+  phaseEventActive,
+}) {
+  const acb = advancedClassBonuses ?? {
+    attackSpeedPercent: 0,
+    critRate: 0,
+    critDamage: 0,
+    elementAdvantageBonus: 0,
+  };
   const stats = jobBattleStats[job] ?? jobBattleStats.warrior;
   const baseAttack = getTotalAttack(job, level, enhanceLevel) + equipBonuses.attackFlat;
   let attack = baseAttack * (1 + traitBonuses.attackPercent / 100);
 
   const lord = getWorldBossLord(lordIndex);
   if (hasElementAdvantage(equipBonuses.weaponElement, lord.weakness)) {
-    attack *= elementAdvantageMultiplier;
+    attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus;
   }
 
-  const critRate = stats.critRate + equipBonuses.critRate / 100;
-  const critDamage = stats.critDamage + equipBonuses.critDamage / 100;
+  const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100;
+  const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100;
   const avgCritMultiplier = 1 + critRate * (critDamage - 1);
 
-  const attackSpeed = stats.attackSpeed * (1 + traitBonuses.attackSpeedPercent / 100);
+  const attackSpeed = stats.attackSpeed * (1 + (traitBonuses.attackSpeedPercent + acb.attackSpeedPercent) / 100);
   let hitsPerSecond = attackSpeed;
 
   if (lord.id === "frost") {

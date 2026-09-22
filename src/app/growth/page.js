@@ -29,6 +29,7 @@ import {
   enhanceBatchOptions,
 } from "@/config/balance";
 import { applyQuestDeltas } from "@/lib/quests";
+import { advancedClassLevel, getAdvancedClasses, getAdvancedClass } from "@/config/advancedClasses";
 
 export default function GrowthPage() {
   const { character, refreshCharacter } = useAuth();
@@ -39,6 +40,7 @@ export default function GrowthPage() {
   const [traitBusy, setTraitBusy] = useState(false);
   const [skillBusyId, setSkillBusyId] = useState(null);
   const [skillEnhanceResult, setSkillEnhanceResult] = useState(null);
+  const [advancedClassBusy, setAdvancedClassBusy] = useState(false);
   const enhancingRef = useRef(false);
 
   // 탭을 급하게 오갈 때 골드가 옛날 값으로 보이는 걸 줄이기 위해,
@@ -79,6 +81,11 @@ export default function GrowthPage() {
   const totalTraitPoints = getTotalTraitPoints(character.level);
   const usedTraitPoints = getUsedTraitPoints(traits);
   const availableTraitPoints = totalTraitPoints - usedTraitPoints;
+
+  const advancedClassOptions = getAdvancedClasses(character.job);
+  const chosenAdvancedClass = progress.advancedClass
+    ? getAdvancedClass(character.job, progress.advancedClass)
+    : null;
 
   async function handleEnhance() {
     // 응답이 오기 전에 버튼이 한 번 더 눌리는 걸 확실히 막는다 (ref는 즉시 반영되어 중복 클릭에 안전함).
@@ -140,6 +147,17 @@ export default function GrowthPage() {
     setTimeout(() => setSkillEnhanceResult(null), 2000);
   }
 
+  async function handleChooseAdvancedClass(classId) {
+    if (advancedClassBusy || progress.advancedClass) return;
+    setAdvancedClassBusy(true);
+    await supabase
+      .from("characters")
+      .update({ progress: { ...progress, advancedClass: classId } })
+      .eq("user_id", character.user_id);
+    await refreshCharacter();
+    setAdvancedClassBusy(false);
+  }
+
   async function handleResetTraits() {
     if (traitBusy || usedTraitPoints === 0 || gold < traitResetCost) return;
     setTraitBusy(true);
@@ -166,7 +184,7 @@ export default function GrowthPage() {
             {character.nickname} · Lv.{character.level}
           </p>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            {job.label} · 강화 +{enhanceLevel}
+            {chosenAdvancedClass ? `${job.label} · ${chosenAdvancedClass.name}` : job.label} · 강화 +{enhanceLevel}
           </p>
         </div>
       </div>
@@ -349,8 +367,43 @@ export default function GrowthPage() {
         )}
       </div>
 
+      {/* 전직 */}
+      <div className="rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
+        <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">전직</h2>
+        {character.level < advancedClassLevel ? (
+          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+            레벨 {advancedClassLevel}부터 전직할 수 있습니다. (현재 Lv.{character.level})
+          </p>
+        ) : chosenAdvancedClass ? (
+          <div className="mt-2 rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
+            <p className="font-semibold text-emerald-500">{chosenAdvancedClass.name}</p>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{chosenAdvancedClass.description}</p>
+          </div>
+        ) : (
+          <>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              한 번 고르면 환생하기 전까지 바꿀 수 없습니다. 신중하게 골라주세요.
+            </p>
+            <div className="mt-3 flex flex-col gap-2">
+              {advancedClassOptions.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => handleChooseAdvancedClass(option.id)}
+                  disabled={advancedClassBusy}
+                  className="rounded-lg border border-zinc-300 px-3 py-2.5 text-left text-sm disabled:opacity-40 dark:border-zinc-700"
+                >
+                  <span className="font-semibold text-zinc-950 dark:text-white">{option.name}</span>
+                  <span className="ml-2 text-xs text-zinc-500 dark:text-zinc-400">{option.description}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
       <p className="text-center text-xs text-zinc-400 dark:text-zinc-500">
-        전직, 환생은 다음 단계들에서 추가될 예정입니다.
+        환생은 다음 단계들에서 추가될 예정입니다.
       </p>
     </div>
   );

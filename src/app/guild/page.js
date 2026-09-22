@@ -28,6 +28,7 @@ import { applyAchievementUnlock } from "@/lib/achievements";
 import { fetchGuildBuildings, fetchBuildingContributionBoard, contributeToBuilding } from "@/lib/guildTown";
 import { guildBuildings, getBuildingUpgradeCost, getBuildingEffectValue, guildBuildingMaxLevel } from "@/config/guildTown";
 import { rollExpeditionResult, payExpeditionCompanionFee } from "@/lib/expeditions";
+import { getAdvancedClassBonuses } from "@/config/advancedClasses";
 import { expeditionMissions, getExpeditionMission, expeditionCompanionFeeGold } from "@/config/expeditions";
 
 const contributionPresets = [1000, 10000, 100000];
@@ -252,12 +253,14 @@ export default function GuildPage() {
       bossState.phase_event_until && new Date(bossState.phase_event_until).getTime() > Date.now()
     );
     const { equipBonuses, traitBonuses } = combatStatsRef.current;
+    const advancedClassBonuses = getAdvancedClassBonuses(character.job, character.progress?.advancedClass);
     const damage = computeChallengeDamage({
       job: character.job,
       level: character.level,
       enhanceLevel: character.progress?.enhanceLevel ?? 0,
       equipBonuses,
       traitBonuses,
+      advancedClassBonuses,
       gold: character.progress?.gold ?? 0,
       lordIndex: bossState.lord_index,
       phaseEventActive,
@@ -335,12 +338,16 @@ export default function GuildPage() {
     const { error } = await sendCheer(character.user_id, character.nickname, receiver.user_id);
     if (!error) {
       const progress = character.progress ?? {};
+      const advancedClassBonuses = getAdvancedClassBonuses(character.job, progress.advancedClass);
+      const contributionGain = Math.round(
+        cheerContributionReward * (1 + advancedClassBonuses.guildContributionPercent / 100)
+      );
       await supabase
         .from("characters")
         .update({
           progress: {
             ...progress,
-            guildContribution: (progress.guildContribution ?? 0) + cheerContributionReward,
+            guildContribution: (progress.guildContribution ?? 0) + contributionGain,
             quests: applyQuestDeltas(progress.quests, { cheers: 1 }),
           },
         })
