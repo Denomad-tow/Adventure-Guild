@@ -20,7 +20,13 @@ import {
   challengeWorldBoss,
   countRecentChallengers,
 } from "@/lib/worldBoss";
-import { getWorldBossLord, worldBossDailyChallengeLimit, rollIllusionWeakness } from "@/config/worldBoss";
+import {
+  getWorldBossLord,
+  worldBossDailyChallengeLimit,
+  rollIllusionWeakness,
+  worldBossTiers,
+  getAllowedWorldBossTiers,
+} from "@/config/worldBoss";
 import { getElement } from "@/config/elements";
 import { getGrade } from "@/config/equipment";
 import { regions } from "@/config/regions";
@@ -31,6 +37,7 @@ import { fetchGuildBuildings, fetchBuildingContributionBoard, contributeToBuildi
 import { guildBuildings, getBuildingUpgradeCost, getBuildingEffectValue, guildBuildingMaxLevel } from "@/config/guildTown";
 import { rollExpeditionResult, payExpeditionCompanionFee } from "@/lib/expeditions";
 import { getAdvancedClassBonuses } from "@/config/advancedClasses";
+import { getResearchBonuses } from "@/config/research";
 import { expeditionMissions, getExpeditionMission, expeditionCompanionFeeGold } from "@/config/expeditions";
 import { advanceSeasonIfEnded, fetchSeasonLeaderboards } from "@/lib/season";
 import { isNewsCategoryVisible } from "@/config/guildNews";
@@ -46,6 +53,7 @@ const emptyEquipBonuses = {
   critRate: 0,
   critDamage: 0,
   goldFind: 0,
+  dropChancePercent: 0,
   weaponElement: null,
   uniqueEffects: [],
   uniqueEffectBonuses: { goldFindPercent: 0, elementAdvantageBonus: 0, critRate: 0, expPercent: 0 },
@@ -135,6 +143,7 @@ export default function GuildPage() {
   const [phaseEventActive, setPhaseEventActive] = useState(false);
   const [bossBoard, setBossBoard] = useState([]);
   const [remainingChallenges, setRemainingChallenges] = useState(worldBossDailyChallengeLimit);
+  const [challengeTier, setChallengeTier] = useState("easy");
   const [bossBusy, setBossBusy] = useState(false);
   const [bossMessage, setBossMessage] = useState(null);
   const combatStatsRef = useRef({ equipBonuses: emptyEquipBonuses, traitBonuses: emptyTraitBonuses });
@@ -290,15 +299,15 @@ export default function GuildPage() {
     setExpeditionBusy(false);
   }
 
-  const loadWorldBoss = useCallback(async (userId, lordIndexHint) => {
-    const state = await fetchWorldBossState();
+  const loadWorldBoss = useCallback(async (userId, tier, lordIndexHint) => {
+    const state = await fetchWorldBossState(tier);
     if (!state) return;
     setBossState(state);
     setPhaseEventActive(Boolean(state.phase_event_until && new Date(state.phase_event_until).getTime() > Date.now()));
     const lordIndex = lordIndexHint ?? state.lord_index;
     const [remaining, board] = await Promise.all([
-      userId ? getRemainingChallengesToday(userId, lordIndex) : worldBossDailyChallengeLimit,
-      fetchContributionBoard(lordIndex),
+      userId ? getRemainingChallengesToday(userId, tier) : worldBossDailyChallengeLimit,
+      fetchContributionBoard(tier, lordIndex),
     ]);
     setRemainingChallenges(remaining);
     setBossBoard(board);
@@ -307,7 +316,7 @@ export default function GuildPage() {
   useEffect(() => {
     if (!character?.user_id) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadWorldBoss(character.user_id);
+    loadWorldBoss(character.user_id, challengeTier);
     fetchEquippedBonuses(character.user_id)
       .then((equipBonuses) => {
         combatStatsRef.current = {
@@ -316,7 +325,7 @@ export default function GuildPage() {
         };
       })
       .catch(() => {});
-  }, [character?.user_id, character?.progress?.traits, loadWorldBoss]);
+  }, [character?.user_id, character?.progress?.traits, challengeTier, loadWorldBoss]);
 
   async function handleChallengeBoss() {
     if (!character || !bossState || bossBusy || remainingChallenges <= 0) return;
@@ -331,11 +340,14 @@ export default function GuildPage() {
       character.progress?.advancedClass,
       character.progress?.advancedClassTier ?? 1
     );
+    const researchBonuses = getResearchBonuses(character.progress?.research);
+    const allowedTierIds = getAllowedWorldBossTiers(character.level ?? 1).map((t) => t.id);
+    const effectiveTier = allowedTierIds.includes(challengeTier) ? challengeTier : "easy";
     const currentLord = getWorldBossLord(bossState.lord_index);
     const weaknessOverride = currentLord.id === "illusion" ? rollIllusionWeakness() : null;
     const recentChallengerCount =
       currentLord.id === "storm" || currentLord.id === "riftking"
-        ? await countRecentChallengers(bossState.lord_index)
+        ? await countRecentChallengers(effectiveTier, bossState.lord_index)
         : 0;
     const damage = computeChallengeDamage({
       job: character.job,
@@ -344,6 +356,7 @@ export default function GuildPage() {
       equipBonuses,
       traitBonuses,
       advancedClassBonuses,
+      researchBonuses,
       gold: character.progress?.gold ?? 0,
       lordIndex: bossState.lord_index,
       phaseEventActive,
@@ -351,7 +364,7 @@ export default function GuildPage() {
       recentChallengerCount,
     });
 
-    const { result, error } = await challengeWorldBoss(damage, character.nickname);
+    const { result, error } = await challengeWorldBoss(damage, character.nickname, effectiveTier);
     if (error) {
       console.error("월드 보스 도전 실패:", error.message);
       setBossBusy(false);
@@ -399,7 +412,7 @@ export default function GuildPage() {
     }
     setTimeout(() => setBossMessage(null), 4000);
 
-    await loadWorldBoss(character.user_id, result.result_lord_index);
+    await loadWorldBoss(character.user_id, effectiveTier, result.result_lord_index);
     await refreshCharacter();
     setBossBusy(false);
   }
@@ -431,8 +444,10 @@ export default function GuildPage() {
         progress.advancedClass,
         progress.advancedClassTier ?? 1
       );
+      const researchBonuses = getResearchBonuses(progress.research);
       const contributionGain = Math.round(
-        cheerContributionReward * (1 + advancedClassBonuses.guildContributionPercent / 100)
+        cheerContributionReward *
+          (1 + (advancedClassBonuses.guildContributionPercent + researchBonuses.guildContributionPercent) / 100)
       );
       await supabase
         .from("characters")
@@ -657,11 +672,37 @@ export default function GuildPage() {
                 ))}
               </div>
             )}
+            <div className="mt-3 flex gap-1.5">
+              {worldBossTiers.map((tier) => {
+                const unlocked = (character?.level ?? 1) >= tier.requiredLevel;
+                return (
+                  <button
+                    key={tier.id}
+                    type="button"
+                    disabled={!unlocked}
+                    onClick={() => setChallengeTier(tier.id)}
+                    title={unlocked ? undefined : `레벨 ${tier.requiredLevel}부터 도전 가능`}
+                    className={`flex-1 rounded-lg py-1.5 text-xs font-medium ${
+                      challengeTier === tier.id && unlocked
+                        ? "bg-purple-600 text-white"
+                        : unlocked
+                          ? "bg-white text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
+                          : "bg-white text-zinc-300 dark:bg-zinc-900 dark:text-zinc-700"
+                    }`}
+                  >
+                    {unlocked ? tier.label : `🔒 ${tier.label}`}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-center text-[10px] text-zinc-400">
+              어려운 난이도로 도전할수록 전리품 등급·옵션이 더 좋아집니다 (보상 피해량은 동일)
+            </p>
             <button
               type="button"
               onClick={handleChallengeBoss}
               disabled={bossBusy || remainingChallenges <= 0}
-              className="mt-3 w-full rounded-lg bg-purple-600 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+              className="mt-2 w-full rounded-lg bg-purple-600 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
             >
               도전하기
             </button>

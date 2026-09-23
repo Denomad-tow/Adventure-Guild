@@ -113,7 +113,33 @@ export const petSpecies = [
 ];
 
 export const eggDropChance = 0.005; // 몬스터 처치당 알 획득 확률 (0.5%)
-export const eggHatchHours = 3; // 알을 얻은 뒤 이만큼 지나야 부화 가능
+// 동시에 부화를 진행할 수 있는 "부화칸" 개수. 알은 부화칸에 넣어야만 부화 시간이 흐르기 시작한다.
+export const petHatchSlotCount = 3;
+export const eggHatchHours = 1; // (예전 방식과 호환용 기본값) 등급 없이 부화 시간을 정할 때 쓰는 기본값
+
+// 알 등급: 장비 등급과 같은 확률표를 그대로 쓴다. 등급이 높을수록 부화 시간이 오래 걸리지만, 효과도 더 세다.
+export const petGrades = [
+  { id: "common", label: "일반", color: "#9ca3af", dropRate: 0.6, hatchHours: 1, bonusMultiplier: 1 },
+  { id: "uncommon", label: "고급", color: "#22c55e", dropRate: 0.25, hatchHours: 2, bonusMultiplier: 1.2 },
+  { id: "rare", label: "희귀", color: "#3b82f6", dropRate: 0.11, hatchHours: 4, bonusMultiplier: 1.5 },
+  { id: "epic", label: "영웅", color: "#a855f7", dropRate: 0.035, hatchHours: 8, bonusMultiplier: 2 },
+  { id: "legendary", label: "전설", color: "#f97316", dropRate: 0.0049, hatchHours: 16, bonusMultiplier: 2.6 },
+  { id: "mythic", label: "신화", color: "#ef4444", dropRate: 0.0001, hatchHours: 24, bonusMultiplier: 3.5 },
+];
+
+export function getPetGrade(gradeId) {
+  return petGrades.find((g) => g.id === gradeId) ?? petGrades[0];
+}
+
+export function rollPetGrade() {
+  const roll = Math.random();
+  let cumulative = 0;
+  for (const grade of petGrades) {
+    cumulative += grade.dropRate;
+    if (roll < cumulative) return grade.id;
+  }
+  return petGrades[0].id;
+}
 
 export const petMaxLevel = 30;
 export const petEvolveLevel1 = 10; // 성체
@@ -149,17 +175,19 @@ export function getPetEmoji(speciesId, level, isEgg) {
   return species.babyEmoji;
 }
 
-// 진화(레벨 구간)와 별 등급(중복 펫으로 올림) 둘 다 효과에 반영된다.
-export function getPetBonusValue(speciesId, level, star = 1) {
+// 진화(레벨 구간), 별 등급(중복 펫으로 올림), 알 등급(일반~신화) 셋 다 효과에 반영된다.
+export function getPetBonusValue(speciesId, level, star = 1, gradeId = "common") {
   const species = getPetSpecies(speciesId);
   if (!species) return 0;
   const stageMultiplier = level >= petEvolveLevel2 ? 2 : level >= petEvolveLevel1 ? 1.5 : 1;
   const starMultiplier = 1 + ((star ?? 1) - 1) * (petStarBonusPercentPerStar / 100);
-  return Math.round(species.baseBonus * stageMultiplier * starMultiplier * 10) / 10;
+  const gradeMultiplier = getPetGrade(gradeId).bonusMultiplier;
+  return Math.round(species.baseBonus * stageMultiplier * starMultiplier * gradeMultiplier * 10) / 10;
 }
 
-export function getPetFeedCost(level) {
-  return petFeedStoneCostPerLevel * level;
+// costReductionPercent: "사육 지식" 연구로 얻는 먹이 비용 할인율(%)
+export function getPetFeedCost(level, costReductionPercent = 0) {
+  return Math.round(petFeedStoneCostPerLevel * level * (1 - Math.min(costReductionPercent, 80) / 100));
 }
 
 export function rollPetSpecies() {

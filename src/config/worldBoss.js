@@ -79,9 +79,25 @@ export const worldBossParticipationRewardRatio = 0.006; // 참여만 해도 받�
 export const worldBossContributionPoolRatio = 0.1; // 기여도(피해 비율)에 따라 나눠 갖는 전체 보너스 몫 = max_hp × 이 값
 export const worldBossFinalBlowBonusRatio = 0.02; // 막타를 친 사람이 추가로 받는 보상 = max_hp × 이 값
 
-// 보스를 쓰러뜨렸을 때, 참여자 각각에게 작게나마 전설/신화 장비가 나올 확률 (희귀 이하 장비 확률표와는 별개)
-export const worldBossLegendaryDropChance = 0.03; // 3%
-export const worldBossMythicDropChance = 0.003; // 0.3%
+// 월드 보스 전리품(영웅 이상 확정, 세트는 항상 "일곱 군주의 유산")의 실제 확률표와 옵션 개수/수치는
+// supabase/030_world_boss_tiers_and_loot.sql 의 challenge_world_boss 함수 안에 있다.
+// 여기서 값을 바꿔도 실제 보상에는 반영되지 않으니, 바꾸려면 그 SQL 파일도 같이 고쳐서 다시 실행해야 한다.
+
+// 도전 난이도: 캐릭터 레벨이 낮으면 쉬움만 고를 수 있다 (서버에서도 다시 확인해서 막는다).
+// 난이도가 높을수록 전리품 등급이 잘 나오고 옵션 개수도 많아진다.
+export const worldBossTiers = [
+  { id: "easy", label: "쉬움", requiredLevel: 0 },
+  { id: "normal", label: "보통", requiredLevel: 100 },
+  { id: "hard", label: "어려움", requiredLevel: 500 },
+];
+
+export function getWorldBossTier(tierId) {
+  return worldBossTiers.find((t) => t.id === tierId) ?? worldBossTiers[0];
+}
+
+export function getAllowedWorldBossTiers(level) {
+  return worldBossTiers.filter((t) => level >= t.requiredLevel);
+}
 
 // 탐욕의 군주: 보유 골드 1000당 피해 +1%, 최대 +100%
 export const worldBossGreedGoldBonusPer1000Percent = 1;

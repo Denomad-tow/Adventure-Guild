@@ -19,10 +19,12 @@ import { fetchDefeatedLordIds } from "@/lib/worldBoss";
 import { guildNewsCategories, getDefaultNewsFilters } from "@/config/guildNews";
 import { fetchMailbox, claimMail } from "@/lib/mailbox";
 import { submitBugReport, fetchMyBugReports } from "@/lib/bugReports";
+import { researchCategories, getResearchCost, getResearchNode } from "@/config/research";
 
 const moreTabs = [
   { id: "quests", label: "퀘스트" },
   { id: "dex", label: "도감" },
+  { id: "research", label: "연구" },
   { id: "achievements", label: "업적" },
   { id: "titles", label: "칭호" },
   { id: "chronicle", label: "연대기" },
@@ -127,6 +129,8 @@ export default function MorePage() {
     .filter(({ index }) => unlockedRegionIndex > index);
   const lordStories = worldBossLords.filter((lord) => defeatedLordIds.has(lord.id));
   const unclaimedMailCount = mailbox.filter((mail) => !mail.claimed).length;
+  const researchPoints = progress.researchPoints ?? 0;
+  const researchLevels = progress.research ?? {};
   const newsFilters = { ...getDefaultNewsFilters(), ...(progress.newsFilters ?? {}) };
 
   async function updateProgress(updater) {
@@ -171,6 +175,21 @@ export default function MorePage() {
   async function handleEquipTitle(title) {
     if (claimBusy) return;
     await updateProgress((p) => ({ ...p, equippedTitle: title }));
+  }
+
+  async function handleBuyResearch(nodeId) {
+    if (claimBusy) return;
+    const node = getResearchNode(nodeId);
+    if (!node) return;
+    const currentLevel = researchLevels[nodeId] ?? 0;
+    if (currentLevel >= node.maxLevel) return;
+    const cost = getResearchCost(nodeId, currentLevel);
+    if (researchPoints < cost) return;
+    await updateProgress((p) => ({
+      ...p,
+      researchPoints: (p.researchPoints ?? 0) - cost,
+      research: { ...(p.research ?? {}), [nodeId]: currentLevel + 1 },
+    }));
   }
 
   async function handleToggleNewsFilter(categoryId) {
@@ -368,6 +387,49 @@ export default function MorePage() {
             );
           })}
         </>
+      )}
+
+      {activeTab === "research" && (
+        <div className="flex flex-col gap-4">
+          <div className="rounded-lg bg-indigo-100 px-4 py-2 text-center text-sm font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+            🔬 보유 연구 포인트 {formatNumber(researchPoints)} (몬스터를 잡으면 조금씩 쌓입니다)
+          </div>
+          {researchCategories.map((category) => (
+            <div key={category.id} className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+              <h2 className="mb-2 text-sm font-semibold text-zinc-950 dark:text-white">
+                {category.icon} {category.label}
+              </h2>
+              <div className="flex flex-col gap-2">
+                {category.nodes.map((node) => {
+                  const level = researchLevels[node.id] ?? 0;
+                  const isMax = level >= node.maxLevel;
+                  const cost = isMax ? null : getResearchCost(node.id, level);
+                  return (
+                    <div key={node.id} className="rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
+                      <div className="flex items-center justify-between">
+                        <span className="text-zinc-950 dark:text-white">
+                          {node.name} Lv.{level}/{node.maxLevel}
+                        </span>
+                        <span className="text-xs text-emerald-500">
+                          {node.description} +{formatNumber(node.perLevel * level)}
+                          {node.suffix}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleBuyResearch(node.id)}
+                        disabled={claimBusy || isMax || researchPoints < cost}
+                        className="mt-2 w-full rounded-lg border border-indigo-400 py-1.5 text-xs font-medium text-indigo-600 disabled:opacity-40 dark:border-indigo-700 dark:text-indigo-400"
+                      >
+                        {isMax ? "최대 레벨" : `연구하기 (🔬${formatNumber(cost)})`}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {activeTab === "achievements" && (

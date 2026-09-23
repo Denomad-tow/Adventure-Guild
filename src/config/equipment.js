@@ -65,6 +65,13 @@ export const equipmentSets = [
     bonus2: { critDamage: 22 },
     bonus4: { attackPercent: 20 },
   },
+  {
+    // 월드 보스 전용 세트. 일반 몬스터 드랍으로는 절대 나오지 않고, 세트 효과도 필드 세트 중 가장 센 것보다 높다.
+    id: "worldboss",
+    name: "일곱 군주의 유산 세트",
+    bonus2: { attackPercent: 12 },
+    bonus4: { attackPercent: 28 },
+  },
 ];
 
 export function getEquipmentSet(setId) {
@@ -176,13 +183,15 @@ export const grades = [
   { id: "mythic", label: "신화", color: "#ef4444", dropRate: 0.0001, optionCount: 4, baseAttack: 80 },
 ];
 
-// 장비에 붙는 랜덤 옵션 종류. value의 의미: attackFlat=공격력 그대로 더함, 나머지는 %포인트.
+// 장비에 붙는 랜덤 옵션 종류. 전부 %포인트 값이다 (공격력도 예전엔 고정 수치였지만,
+// 고레벨로 갈수록 의미가 없어지는 문제가 있어서 %로 바꿨다).
 // min/max는 "고급" 등급 기준이고, 실제로 붙는 값은 등급별 배율(optionGradeMultiplier)만큼 커진다.
 export const optionTypes = [
-  { id: "attackFlat", label: "공격력", min: 1, max: 5, suffix: "" },
+  { id: "attackPercent", label: "공격력", min: 1, max: 4, suffix: "%" },
   { id: "critRate", label: "치명타 확률", min: 1, max: 4, suffix: "%" },
   { id: "critDamage", label: "치명타 피해", min: 3, max: 10, suffix: "%" },
   { id: "goldFind", label: "골드 획득", min: 3, max: 10, suffix: "%" },
+  { id: "dropChancePercent", label: "희귀 드롭 확률", min: 2, max: 6, suffix: "%" },
 ];
 
 // 등급이 높을수록 같은 옵션이라도 최대치가 커진다 (일반은 옵션이 아예 안 붙으므로 목록에서 제외).
@@ -241,11 +250,13 @@ export function getItemEnhanceSuccessRate(currentLevel, bonusPercent = 0) {
 export const reforgeStoneCostByGrade = [2, 3, 5, 8, 15, 25];
 export const reforgeGoldCostByGrade = [100, 300, 1000, 3000, 10000, 30000];
 
-export function getReforgeCost(gradeId) {
+// costReductionPercent: "재련 마스터리" 연구로 얻는 재련 비용 할인율(%)
+export function getReforgeCost(gradeId, costReductionPercent = 0) {
   const index = getGradeIndex(gradeId);
+  const discount = 1 - Math.min(costReductionPercent, 80) / 100;
   return {
-    stones: reforgeStoneCostByGrade[index] ?? reforgeStoneCostByGrade[0],
-    gold: reforgeGoldCostByGrade[index] ?? reforgeGoldCostByGrade[0],
+    stones: Math.round((reforgeStoneCostByGrade[index] ?? reforgeStoneCostByGrade[0]) * discount),
+    gold: Math.round((reforgeGoldCostByGrade[index] ?? reforgeGoldCostByGrade[0]) * discount),
   };
 }
 
@@ -364,7 +375,14 @@ export function getMerchantPrice(gradeId, priceMultiplier) {
 // 장착 중인 장비 목록을 넣으면, 전투에 실제로 반영할 보너스 합계를 계산해준다.
 // (개별 강화 단계와 세트 효과까지 모두 반영)
 export function getEquipmentStatBonuses(equippedItems) {
-  const bonuses = { attackFlat: 0, attackPercent: 0, critRate: 0, critDamage: 0, goldFind: 0 };
+  const bonuses = {
+    attackFlat: 0,
+    attackPercent: 0,
+    critRate: 0,
+    critDamage: 0,
+    goldFind: 0,
+    dropChancePercent: 0,
+  };
   const setCounts = {};
 
   for (const item of equippedItems) {

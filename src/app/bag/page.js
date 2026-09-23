@@ -26,13 +26,14 @@ import {
   rerollOption,
   getOptionRange,
 } from "@/config/equipment";
+import { getResearchBonuses } from "@/config/research";
 import { getElement } from "@/config/elements";
 import { postGuildNews } from "@/lib/guildNews";
 import { getAchievement } from "@/config/achievements";
 import { applyAchievementUnlock } from "@/lib/achievements";
 import { fetchGuildTownBonuses } from "@/lib/guildTown";
 import { emptyGuildTownBonuses } from "@/config/guildTown";
-import { fetchPets, hatchEgg, equipPet, unequipPet, upgradePetStar } from "@/lib/pets";
+import { fetchPets, hatchEgg, equipPet, unequipPet, upgradePetStar, placeEggInHatchSlot } from "@/lib/pets";
 import { getUniqueEffect } from "@/config/uniqueEffects";
 import {
   petSpecies,
@@ -46,6 +47,8 @@ import {
   petFeedExpGain,
   petMaxStar,
   petEvolveLevel2,
+  getPetGrade,
+  petHatchSlotCount,
 } from "@/config/pets";
 
 const rareOrBelowIndex = getGradeIndex("rare");
@@ -126,6 +129,7 @@ export default function BagPage() {
   const progress = character.progress ?? {};
   const gold = progress.gold ?? 0;
   const stones = progress.enhancementStones ?? 0;
+  const researchBonuses = getResearchBonuses(progress.research);
 
   const equippedBySlot = {};
   for (const item of items) {
@@ -169,9 +173,18 @@ export default function BagPage() {
     setPetBusy(null);
   }
 
+  async function handlePlaceEggInSlot(pet, slotIndex) {
+    if (petBusy) return;
+    setPetBusy(pet.id);
+    const { error } = await placeEggInHatchSlot(pet, slotIndex, researchBonuses.petHatchSpeedBonusPercent);
+    if (error) console.error("부화칸 배정 실패:", error.message);
+    await loadPets(character.user_id);
+    setPetBusy(null);
+  }
+
   async function handleFeedPet(pet) {
     if (petBusy || pet.level >= petMaxLevel) return;
-    const cost = getPetFeedCost(pet.level);
+    const cost = getPetFeedCost(pet.level, researchBonuses.petFeedCostReductionPercent);
     if (stones < cost) return;
     setPetBusy(pet.id);
 
@@ -236,6 +249,14 @@ export default function BagPage() {
     setBusy(false);
   }
 
+  async function handleUnequipAll() {
+    setBusy(true);
+    await supabase.from("equipment").update({ equipped: false }).eq("user_id", character.user_id).eq("equipped", true);
+    await loadItems(character.user_id);
+    setSelectedId(null);
+    setBusy(false);
+  }
+
   async function handleEquip(item) {
     setBusy(true);
     if (!item.equipped) {
@@ -288,7 +309,10 @@ export default function BagPage() {
     if (currentLevel >= maxItemEnhanceLevel || stones < cost) return;
 
     setBusy(true);
-    const success = rollItemEnhanceSuccess(currentLevel, guildBonuses.forgeSuccessBonusPercent);
+    const success = rollItemEnhanceSuccess(
+      currentLevel,
+      guildBonuses.forgeSuccessBonusPercent + researchBonuses.itemEnhanceSuccessBonusPercent
+    );
     const newLevel = success ? currentLevel + 1 : currentLevel;
 
     await supabase.from("equipment").update({ enhance_level: newLevel }).eq("id", item.id);
@@ -322,7 +346,7 @@ export default function BagPage() {
   // 재련: 장비 하나의 옵션 하나를 골라 강화석+골드를 써서 새로 뽑는다. 실패는 없다.
   async function handleReforgeOption(item, optionIndex) {
     if (reforgeBusy) return;
-    const cost = getReforgeCost(item.grade);
+    const cost = getReforgeCost(item.grade, researchBonuses.reforgeCostReductionPercent);
     if (stones < cost.stones || gold < cost.gold) return;
     setReforgeBusy(item.id);
     const nextOptions = rerollOption(item.options ?? [], optionIndex, item.grade);
@@ -371,14 +395,24 @@ export default function BagPage() {
       <div>
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">장착 중</h2>
-          <button
-            type="button"
-            onClick={handleAutoEquip}
-            disabled={busy}
-            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-600 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
-          >
-            ⚡ 자동 장착
-          </button>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={handleAutoEquip}
+              disabled={busy}
+              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-600 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+            >
+              ⚡ 자동 장착
+            </button>
+            <button
+              type="button"
+              onClick={handleUnequipAll}
+              disabled={busy || Object.keys(equippedBySlot).length === 0}
+              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-600 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+            >
+              🗑️ 전체 해제
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-5 gap-2">
           {equipmentSlots.map((slot) => {
@@ -637,7 +671,8 @@ export default function BagPage() {
                           {owned && !owned.eggOnly ? species.finalEmoji : species.emoji}{" "}
                           <span className={owned ? "text-zinc-950 dark:text-white" : ""}>{species.name}</span>
                           <span className="ml-1 text-xs text-zinc-400">
-                            ({species.bonusLabel} 최대 +{getPetBonusValue(species.id, petEvolveLevel2, petMaxStar)}%)
+                            ({species.bonusLabel} 최대 +
+                            {getPetBonusValue(species.id, petEvolveLevel2, petMaxStar, "mythic")}%, 신화 등급 기준)
                           </span>
                         </span>
                         <span className="text-xs font-medium">
@@ -661,12 +696,71 @@ export default function BagPage() {
           </p>
         ) : (
           <div className="flex flex-col gap-2">
+            {(() => {
+              const usedHatchSlots = new Set(
+                pets.filter((p) => p.is_egg && p.hatch_slot != null).map((p) => p.hatch_slot)
+              );
+              return (
+                <p className="mb-1 text-xs text-zinc-400">
+                  부화칸 {usedHatchSlots.size} / {petHatchSlotCount} 사용 중 — 알은 부화칸에 넣어야 부화 시간이
+                  흐릅니다
+                </p>
+              );
+            })()}
             {pets.map((pet) => {
               const species = getPetSpecies(pet.species_id);
               const emoji = getPetEmoji(pet.species_id, pet.level, pet.is_egg);
               const busy = petBusy === pet.id;
 
               if (pet.is_egg) {
+                const eggGrade = getPetGrade(pet.grade ?? "common");
+
+                if (pet.hatch_slot == null) {
+                  const usedSlots = new Set(
+                    pets.filter((p) => p.is_egg && p.hatch_slot != null).map((p) => p.hatch_slot)
+                  );
+                  const availableSlots = Array.from({ length: petHatchSlotCount }, (_, i) => i + 1).filter(
+                    (s) => !usedSlots.has(s)
+                  );
+                  return (
+                    <div
+                      key={pet.id}
+                      className="flex items-center justify-between rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900"
+                    >
+                      <span className="text-zinc-950 dark:text-white">
+                        {emoji} {species?.name ?? "알"}의 알{" "}
+                        <span className="text-xs font-semibold" style={{ color: eggGrade.color }}>
+                          [{eggGrade.label}]
+                        </span>
+                        <span className="ml-1 text-xs text-zinc-400">
+                          (대기 중 ·{" "}
+                          {Math.round(
+                            eggGrade.hatchHours * (1 - Math.min(researchBonuses.petHatchSpeedBonusPercent, 80) / 100) * 10
+                          ) / 10}
+                          시간 소요)
+                        </span>
+                      </span>
+                      {availableSlots.length === 0 ? (
+                        <span className="text-xs text-zinc-400">부화칸 가득 참</span>
+                      ) : (
+                        <div className="flex gap-1">
+                          {availableSlots.map((slot) => (
+                            <button
+                              key={slot}
+                              type="button"
+                              onClick={() => handlePlaceEggInSlot(pet, slot)}
+                              disabled={busy}
+                              className="rounded-lg border border-sky-400 px-2 py-1.5 text-xs font-medium text-sky-600 disabled:opacity-40 dark:border-sky-700 dark:text-sky-400"
+                            >
+                              {slot}번 칸에 넣기
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
                 const hatchAt = new Date(pet.hatch_at).getTime();
                 const ready = hatchAt <= nowTick;
                 return (
@@ -675,7 +769,11 @@ export default function BagPage() {
                     className="flex items-center justify-between rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900"
                   >
                     <span className="text-zinc-950 dark:text-white">
-                      {emoji} {species?.name ?? "알"}의 알
+                      {emoji} {species?.name ?? "알"}의 알{" "}
+                      <span className="text-xs font-semibold" style={{ color: eggGrade.color }}>
+                        [{eggGrade.label}]
+                      </span>
+                      <span className="ml-1 text-xs text-zinc-400">({pet.hatch_slot}번 칸)</span>
                     </span>
                     {ready ? (
                       <button
@@ -697,22 +795,33 @@ export default function BagPage() {
 
               const expToNext = getPetExpToNextLevel(pet.level);
               const isMax = pet.level >= petMaxLevel;
-              const feedCost = isMax ? null : getPetFeedCost(pet.level);
+              const feedCost = isMax ? null : getPetFeedCost(pet.level, researchBonuses.petFeedCostReductionPercent);
               const star = pet.star ?? 1;
               const isStarMax = star >= petMaxStar;
               const duplicatePets = pets.filter(
                 (p) => p.species_id === pet.species_id && p.id !== pet.id && !p.is_egg
               );
               const showStarPicker = starPickerPetId === pet.id;
+              const petGrade = getPetGrade(pet.grade ?? "common");
               return (
                 <div key={pet.id} className="rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
                   <div className="flex items-center justify-between">
                     <span className="text-zinc-950 dark:text-white">
-                      {emoji} {species?.name} ({getPetStageName(pet.level)}) Lv.{pet.level}
+                      {emoji} {species?.name}{" "}
+                      <span className="text-xs font-semibold" style={{ color: petGrade.color }}>
+                        [{petGrade.label}]
+                      </span>{" "}
+                      ({getPetStageName(pet.level)}) Lv.{pet.level}
                       {pet.equipped && <span className="ml-1 text-xs text-sky-500">장착 중</span>}
                     </span>
                     <span className="text-xs text-emerald-500">
-                      {species?.bonusLabel} +{getPetBonusValue(pet.species_id, pet.level, star)}%
+                      {species?.bonusLabel} +
+                      {Math.round(
+                        getPetBonusValue(pet.species_id, pet.level, star, pet.grade ?? "common") *
+                          (1 + researchBonuses.petBonusValuePercent / 100) *
+                          10
+                      ) / 10}
+                      %
                     </span>
                   </div>
                   <p className="mt-0.5 text-xs text-amber-500">{"⭐".repeat(star)}</p>
@@ -843,7 +952,7 @@ export default function BagPage() {
             {selectedItem.options?.length > 0 && (
               <div className="mt-3 flex flex-col gap-1.5 rounded-lg bg-zinc-100 p-3 text-sm dark:bg-zinc-800">
                 {(() => {
-                  const reforgeCost = getReforgeCost(selectedItem.grade);
+                  const reforgeCost = getReforgeCost(selectedItem.grade, researchBonuses.reforgeCostReductionPercent);
                   const canReforge = stones >= reforgeCost.stones && gold >= reforgeCost.gold;
                   return selectedItem.options.map((opt, idx) => {
                     const optionType = getOptionType(opt.type);
@@ -877,8 +986,10 @@ export default function BagPage() {
                   });
                 })()}
                 <p className="mt-1 text-right text-[10px] text-zinc-400">
-                  재련: 옵션 하나를 새로 뽑습니다 (🔩{getReforgeCost(selectedItem.grade).stones} ·{" "}
-                  {formatNumber(getReforgeCost(selectedItem.grade).gold)}G, 실패 없음)
+                  재련: 옵션 하나를 새로 뽑습니다 (🔩
+                  {getReforgeCost(selectedItem.grade, researchBonuses.reforgeCostReductionPercent).stones} ·{" "}
+                  {formatNumber(getReforgeCost(selectedItem.grade, researchBonuses.reforgeCostReductionPercent).gold)}
+                  G, 실패 없음)
                 </p>
               </div>
             )}
@@ -906,7 +1017,10 @@ export default function BagPage() {
                   <span className="text-xs text-red-500">
                     성공률{" "}
                     {Math.round(
-                      getItemEnhanceSuccessRate(selectedItem.enhance_level ?? 0, guildBonuses.forgeSuccessBonusPercent) * 100
+                      getItemEnhanceSuccessRate(
+                        selectedItem.enhance_level ?? 0,
+                        guildBonuses.forgeSuccessBonusPercent + researchBonuses.itemEnhanceSuccessBonusPercent
+                      ) * 100
                     )}%
                   </span>
                 )}

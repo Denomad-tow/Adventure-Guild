@@ -41,8 +41,9 @@ import { fetchGuildTownBonuses } from "@/lib/guildTown";
 import { emptyGuildTownBonuses } from "@/config/guildTown";
 import { getAdvancedClassBonuses, emptyAdvancedClassBonuses } from "@/config/advancedClasses";
 import { getRelicBonuses, emptyRelicBonuses } from "@/lib/prestige";
+import { researchPointsPerKill, getResearchBonuses, emptyResearchBonuses } from "@/config/research";
 import { fetchPets, getActivePetBonuses, emptyPetBonuses } from "@/lib/pets";
-import { eggDropChance, rollPetSpecies, eggHatchHours } from "@/config/pets";
+import { eggDropChance, rollPetSpecies, rollPetGrade, getPetGrade } from "@/config/pets";
 import { getUniqueEffect, emptyUniqueEffectBonuses } from "@/config/uniqueEffects";
 import {
   merchantCheckIntervalMs,
@@ -77,6 +78,7 @@ const emptyEquipBonuses = {
   critRate: 0,
   critDamage: 0,
   goldFind: 0,
+  dropChancePercent: 0,
   weaponElement: null,
   uniqueEffects: [],
   uniqueEffectBonuses: emptyUniqueEffectBonuses,
@@ -146,6 +148,7 @@ function applyHit(state, damage) {
   const guildBonuses = state.guildBonuses ?? emptyGuildTownBonuses;
   const advancedClassBonuses = state.advancedClassBonuses ?? emptyAdvancedClassBonuses;
   const petBonuses = state.petBonuses ?? emptyPetBonuses;
+  const researchBonuses = state.researchBonuses ?? emptyResearchBonuses;
   const uniqueEffectBonuses = equipBonuses.uniqueEffectBonuses ?? emptyUniqueEffectBonuses;
   const goldMultiplier =
     1 +
@@ -154,17 +157,27 @@ function applyHit(state, damage) {
       guildBonuses.treasuryGoldBonusPercent +
       advancedClassBonuses.goldFindPercent +
       petBonuses.goldFindPercent +
-      uniqueEffectBonuses.goldFindPercent) /
+      uniqueEffectBonuses.goldFindPercent +
+      researchBonuses.goldFindPercent) /
       100;
   const expMultiplier =
-    1 + (guildBonuses.trainingExpBonusPercent + petBonuses.expPercent + uniqueEffectBonuses.expPercent) / 100;
+    1 +
+    (guildBonuses.trainingExpBonusPercent +
+      petBonuses.expPercent +
+      uniqueEffectBonuses.expPercent +
+      researchBonuses.expPercent) /
+      100;
   const gold = state.gold + Math.round(reward.gold * goldMultiplier);
   let exp = state.exp + Math.round(reward.exp * expMultiplier);
   const droppedItem = rollEquipmentDrop(
     regions[state.regionIndex]?.id,
-    traitBonuses.dropChancePercent + petBonuses.dropChancePercent
+    traitBonuses.dropChancePercent +
+      petBonuses.dropChancePercent +
+      (equipBonuses.dropChancePercent ?? 0) +
+      researchBonuses.dropChancePercent
   );
-  const droppedEgg = Math.random() < eggDropChance ? rollPetSpecies() : null;
+  const droppedEgg =
+    Math.random() < eggDropChance ? { species: rollPetSpecies(), grade: rollPetGrade() } : null;
 
   let expToNext = getExpToNextLevel(level);
   while (exp >= expToNext) {
@@ -220,6 +233,7 @@ async function saveProgress(character, battle, questDeltas) {
   const priorLifetimeKills = progress.lifetimeKills ?? 0;
   const lifetimeKills = priorLifetimeKills + (questDeltas?.kills ?? 0);
   const enhancementStones = (progress.enhancementStones ?? 0) + (questDeltas?.autoDisassembleStones ?? 0);
+  const researchPoints = (progress.researchPoints ?? 0) + (questDeltas?.researchPoints ?? 0);
 
   let nextProgress = {
     // 가방 탭의 강화석, 성장 탭의 특성처럼, 모험 탭이 다루지 않는 값들은 그대로 보존한다.
@@ -232,6 +246,7 @@ async function saveProgress(character, battle, questDeltas) {
     unlockedRegionIndex: battle.unlockedRegionIndex,
     difficultyTier: battle.difficultyTier,
     enhancementStones,
+    researchPoints,
     // 다음에 접속했을 때 이 시각을 기준으로 방치 보상을 계산한다.
     lastActiveAt: new Date().toISOString(),
     ...(quests ? { quests } : {}),
@@ -301,6 +316,8 @@ export default function AdventurePage() {
   const dexKillsRef = useRef({});
   // 마지막 저장 이후 자동 분해로 쌓인 강화석 수.
   const autoDisassembleStonesRef = useRef(0);
+  // 마지막 저장 이후 쌓인 연구 포인트.
+  const researchPointsRef = useRef(0);
   // character(state)는 effect가 등록된 시점의 값을 그대로 들고 있어서(리렌더 시 재등록되지 않는 effect의
   // 클린업/인터벌 안에서는) 오래된 값일 수 있다. 저장할 때는 항상 이 ref로 최신 값을 읽어서,
   // 다른 탭에서 방금 바뀐 진행도(퀘스트 등)를 되돌려쓰지 않게 한다.
@@ -315,11 +332,13 @@ export default function AdventurePage() {
       kills: questKillsRef.current,
       dex: dexKillsRef.current,
       autoDisassembleStones: autoDisassembleStonesRef.current,
+      researchPoints: researchPointsRef.current,
       ...extra,
     };
     questKillsRef.current = 0;
     dexKillsRef.current = {};
     autoDisassembleStonesRef.current = 0;
+    researchPointsRef.current = 0;
     return deltas;
   }
 
@@ -368,6 +387,7 @@ export default function AdventurePage() {
           progress.advancedClassTier ?? 1
         ),
         relicBonuses: getRelicBonuses(progress.relics),
+        researchBonuses: getResearchBonuses(progress.research),
         prestigeCount: progress.prestigeCount ?? 0,
       };
 
@@ -384,7 +404,7 @@ export default function AdventurePage() {
             equipBonuses: equipBonuses ?? emptyEquipBonuses,
             cheerBuffActive,
             guildBonuses: guildBonuses ?? emptyGuildTownBonuses,
-            petBonuses: getActivePetBonuses(pets),
+            petBonuses: getActivePetBonuses(pets, loaded.researchBonuses.petBonusValuePercent),
             ...initialMonsterState(regionIndex, stage, getRegionDifficultyTier(loaded.difficultyTier).multiplier),
           };
           battleRef.current = state;
@@ -428,6 +448,7 @@ export default function AdventurePage() {
 
     if (next.killed) {
       questKillsRef.current += 1;
+      researchPointsRef.current += current.isElite ? researchPointsPerKill * eliteMultiplier : researchPointsPerKill;
       const region = regions[current.regionIndex];
       const monsterName = region.monsters[current.killIndexInStage % region.monsters.length].name;
       const dexKey = getMonsterKey(region.id, monsterName);
@@ -500,20 +521,23 @@ export default function AdventurePage() {
     }
 
     if (next.droppedEgg) {
+      const eggGrade = getPetGrade(next.droppedEgg.grade);
       supabase
         .from("pets")
         .insert({
           user_id: character.user_id,
-          species_id: next.droppedEgg,
+          species_id: next.droppedEgg.species,
+          grade: next.droppedEgg.grade,
           is_egg: true,
-          hatch_at: new Date(Date.now() + eggHatchHours * 3600 * 1000).toISOString(),
+          hatch_at: null,
+          hatch_slot: null,
         })
         .then(({ error }) => {
           if (error) {
             console.error("알 저장 실패:", error.message);
             return;
           }
-          setEventMessage("🥚 알을 발견했습니다! 가방 탭에서 확인해보세요.");
+          setEventMessage(`🥚 ${eggGrade.label} 알을 발견했습니다! 가방 탭 부화칸에 넣어보세요.`);
           setTimeout(() => setEventMessage(null), 2500);
         });
     }
@@ -532,8 +556,14 @@ export default function AdventurePage() {
     const stats = jobBattleStats[character.job] ?? jobBattleStats.warrior;
     const traitBonuses = battleRef.current.traitBonuses ?? emptyTraitBonuses;
     const advancedClassBonuses = battleRef.current.advancedClassBonuses ?? emptyAdvancedClassBonuses;
+    const researchBonusesAtMount = battleRef.current.researchBonuses ?? emptyResearchBonuses;
     const attackSpeed =
-      stats.attackSpeed * (1 + (traitBonuses.attackSpeedPercent + advancedClassBonuses.attackSpeedPercent) / 100);
+      stats.attackSpeed *
+      (1 +
+        (traitBonuses.attackSpeedPercent +
+          advancedClassBonuses.attackSpeedPercent +
+          researchBonusesAtMount.attackSpeedPercent) /
+          100);
     const intervalMs = 1000 / attackSpeed;
 
     const timer = setInterval(() => {
@@ -543,8 +573,10 @@ export default function AdventurePage() {
       const ueb = equipBonuses.uniqueEffectBonuses ?? emptyUniqueEffectBonuses;
       const tb = current.traitBonuses ?? emptyTraitBonuses;
       const acb = current.advancedClassBonuses ?? emptyAdvancedClassBonuses;
+      const rb = current.researchBonuses ?? emptyResearchBonuses;
       const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
-      let attack = baseAttack * (1 + (tb.attackPercent + equipBonuses.attackPercent + acb.attackPercent) / 100);
+      let attack =
+        baseAttack * (1 + (tb.attackPercent + equipBonuses.attackPercent + acb.attackPercent + rb.attackPercent) / 100);
       const region = regions[current.regionIndex];
       if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
         attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus + ueb.elementAdvantageBonus;
@@ -556,7 +588,8 @@ export default function AdventurePage() {
       const relicBonuses = current.relicBonuses ?? emptyRelicBonuses;
       const petBonuses = current.petBonuses ?? emptyPetBonuses;
       attack *= 1 + (relicBonuses.allDamagePercent + petBonuses.attackPercent) / 100;
-      const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100 + ueb.critRate / 100;
+      const critRate =
+        stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100 + ueb.critRate / 100 + rb.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100 + petBonuses.critDamagePercent / 100;
       const isCrit = Math.random() < critRate;
       const damage = Math.round(attack * (isCrit ? critDamage : 1));
@@ -589,8 +622,10 @@ export default function AdventurePage() {
       const ueb = equipBonuses.uniqueEffectBonuses ?? emptyUniqueEffectBonuses;
       const tb = current.traitBonuses ?? emptyTraitBonuses;
       const acb = current.advancedClassBonuses ?? emptyAdvancedClassBonuses;
+      const rb = current.researchBonuses ?? emptyResearchBonuses;
       const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
-      let attack = baseAttack * (1 + (tb.attackPercent + equipBonuses.attackPercent + acb.attackPercent) / 100);
+      let attack =
+        baseAttack * (1 + (tb.attackPercent + equipBonuses.attackPercent + acb.attackPercent + rb.attackPercent) / 100);
       const region = regions[current.regionIndex];
       if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
         attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus + ueb.elementAdvantageBonus;
@@ -602,7 +637,8 @@ export default function AdventurePage() {
       const relicBonuses = current.relicBonuses ?? emptyRelicBonuses;
       const petBonuses = current.petBonuses ?? emptyPetBonuses;
       attack *= 1 + (relicBonuses.allDamagePercent + petBonuses.attackPercent) / 100;
-      const critRate = stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100 + ueb.critRate / 100;
+      const critRate =
+        stats.critRate + equipBonuses.critRate / 100 + acb.critRate / 100 + ueb.critRate / 100 + rb.critRate / 100;
       const critDamage = stats.critDamage + equipBonuses.critDamage / 100 + acb.critDamage / 100 + petBonuses.critDamagePercent / 100;
 
       const now = Date.now();
@@ -888,6 +924,7 @@ export default function AdventurePage() {
   const advancedClassBonuses = battle.advancedClassBonuses ?? emptyAdvancedClassBonuses;
   const relicBonuses = battle.relicBonuses ?? emptyRelicBonuses;
   const petBonuses = battle.petBonuses ?? emptyPetBonuses;
+  const researchBonuses = battle.researchBonuses ?? emptyResearchBonuses;
   const uniqueEffectBonuses = equipBonuses.uniqueEffectBonuses ?? emptyUniqueEffectBonuses;
   const region = regions[battle.regionIndex];
   const hasAdvantage = hasElementAdvantage(equipBonuses.weaponElement, region.element);
@@ -898,7 +935,12 @@ export default function AdventurePage() {
     getCompletedRegionCount(battle.monsterDex, regions) * regionDexCompleteBonusPercent;
   const attack =
     (getTotalAttack(character.job, battle.level, battle.enhanceLevel) + equipBonuses.attackFlat) *
-    (1 + (traitBonuses.attackPercent + equipBonuses.attackPercent + advancedClassBonuses.attackPercent) / 100) *
+    (1 +
+      (traitBonuses.attackPercent +
+        equipBonuses.attackPercent +
+        advancedClassBonuses.attackPercent +
+        researchBonuses.attackPercent) /
+        100) *
     (hasAdvantage
       ? elementAdvantageMultiplier + advancedClassBonuses.elementAdvantageBonus + uniqueEffectBonuses.elementAdvantageBonus
       : 1) *
@@ -906,6 +948,56 @@ export default function AdventurePage() {
     (1 + dexBonusPercent / 100) *
     (1 + (relicBonuses.allDamagePercent + petBonuses.attackPercent) / 100);
   const isBossReady = battle.stage >= stagesPerRegion;
+
+  // Buff 패널에 보여줄 "현재 총 능력치"들. 실제 전투 계산과 같은 공식을 그대로 써서 화면에 뜨는 숫자가 정확히 맞게 한다.
+  const jobStats = jobBattleStats[character.job] ?? jobBattleStats.warrior;
+  const totalCritRatePercent =
+    Math.round(
+      (jobStats.critRate +
+        equipBonuses.critRate / 100 +
+        advancedClassBonuses.critRate / 100 +
+        uniqueEffectBonuses.critRate / 100 +
+        researchBonuses.critRate / 100) *
+        1000
+    ) / 10;
+  const totalCritDamagePercent = Math.round(
+    (jobStats.critDamage +
+      equipBonuses.critDamage / 100 +
+      advancedClassBonuses.critDamage / 100 +
+      petBonuses.critDamagePercent / 100) *
+      100
+  );
+  const totalAttackSpeed =
+    Math.round(
+      jobStats.attackSpeed *
+        (1 +
+          (traitBonuses.attackSpeedPercent +
+            advancedClassBonuses.attackSpeedPercent +
+            researchBonuses.attackSpeedPercent) /
+            100) *
+        100
+    ) / 100;
+  const totalGoldFindPercent = Math.round(
+    equipBonuses.goldFind +
+      traitBonuses.goldFindPercent +
+      (battle.guildBonuses?.treasuryGoldBonusPercent ?? 0) +
+      advancedClassBonuses.goldFindPercent +
+      petBonuses.goldFindPercent +
+      uniqueEffectBonuses.goldFindPercent +
+      researchBonuses.goldFindPercent
+  );
+  const totalExpPercent = Math.round(
+    (battle.guildBonuses?.trainingExpBonusPercent ?? 0) +
+      petBonuses.expPercent +
+      uniqueEffectBonuses.expPercent +
+      researchBonuses.expPercent
+  );
+  const totalDropChancePercent = Math.round(
+    traitBonuses.dropChancePercent +
+      petBonuses.dropChancePercent +
+      (equipBonuses.dropChancePercent ?? 0) +
+      researchBonuses.dropChancePercent
+  );
 
   return (
     <div className="flex flex-col gap-4 px-6 py-8">
@@ -934,6 +1026,37 @@ export default function AdventurePage() {
                 닫기
               </button>
             </div>
+            <div className="mb-3 grid grid-cols-2 gap-2 rounded-lg bg-zinc-100 p-3 text-xs dark:bg-zinc-800">
+              <div className="flex flex-col">
+                <span className="text-zinc-400">공격력</span>
+                <span className="font-semibold text-zinc-950 dark:text-white">{formatNumber(attack)}</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-400">치명타 확률</span>
+                <span className="font-semibold text-zinc-950 dark:text-white">{totalCritRatePercent}%</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-400">치명타 피해</span>
+                <span className="font-semibold text-zinc-950 dark:text-white">{totalCritDamagePercent}%</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-400">공격 속도</span>
+                <span className="font-semibold text-zinc-950 dark:text-white">초당 {totalAttackSpeed}회</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-400">골드 획득</span>
+                <span className="font-semibold text-zinc-950 dark:text-white">+{totalGoldFindPercent}%</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-400">경험치 획득</span>
+                <span className="font-semibold text-zinc-950 dark:text-white">+{totalExpPercent}%</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-400">희귀 드롭 확률</span>
+                <span className="font-semibold text-zinc-950 dark:text-white">+{totalDropChancePercent}%</span>
+              </div>
+            </div>
+            <p className="mb-1.5 text-xs font-medium text-zinc-400">공격력 상세 내역</p>
             <ul className="flex flex-col gap-1.5 text-zinc-600 dark:text-zinc-300">
               <li className="flex justify-between">
                 <span>기본 공격력 (레벨 {battle.level})</span>
@@ -967,6 +1090,12 @@ export default function AdventurePage() {
                 <li className="flex justify-between text-emerald-500">
                   <span>전직 승급 효과</span>
                   <span>+{advancedClassBonuses.attackPercent}%</span>
+                </li>
+              )}
+              {researchBonuses.attackPercent > 0 && (
+                <li className="flex justify-between text-indigo-500">
+                  <span>연구 (전투)</span>
+                  <span>+{researchBonuses.attackPercent}%</span>
                 </li>
               )}
               {hasAdvantage && (
@@ -1008,33 +1137,6 @@ export default function AdventurePage() {
                   <span>+{petBonuses.attackPercent}%</span>
                 </li>
               )}
-              <li className="mt-2 flex justify-between border-t border-zinc-200 pt-2 text-xs text-zinc-400 dark:border-zinc-700">
-                <span>골드 획득</span>
-                <span>
-                  +
-                  {equipBonuses.goldFind +
-                    traitBonuses.goldFindPercent +
-                    (battle.guildBonuses?.treasuryGoldBonusPercent ?? 0) +
-                    advancedClassBonuses.goldFindPercent +
-                    petBonuses.goldFindPercent +
-                    uniqueEffectBonuses.goldFindPercent}
-                  %
-                </span>
-              </li>
-              <li className="flex justify-between text-xs text-zinc-400">
-                <span>경험치 획득</span>
-                <span>
-                  +
-                  {(battle.guildBonuses?.trainingExpBonusPercent ?? 0) +
-                    petBonuses.expPercent +
-                    uniqueEffectBonuses.expPercent}
-                  %
-                </span>
-              </li>
-              <li className="flex justify-between text-xs text-zinc-400">
-                <span>희귀 드롭 확률</span>
-                <span>+{traitBonuses.dropChancePercent + petBonuses.dropChancePercent}%</span>
-              </li>
             </ul>
           </div>
         </div>
