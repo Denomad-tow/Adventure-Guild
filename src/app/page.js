@@ -13,7 +13,15 @@ import RegionSelector from "@/components/RegionSelector";
 import DropToast from "@/components/DropToast";
 import CharacterAvatar from "@/components/CharacterAvatar";
 import { regions } from "@/config/regions";
-import { rollEquipmentDrop, rollMerchantItem, getMerchantPrice, getGrade, getSlot, getItemType } from "@/config/equipment";
+import {
+  rollEquipmentDrop,
+  rollMerchantItem,
+  getMerchantPrice,
+  getGrade,
+  getSlot,
+  getItemType,
+  getDisassembleReward,
+} from "@/config/equipment";
 import { fetchEquippedBonuses } from "@/lib/equipmentBonuses";
 import { getJobSkills, getSkillMultiplier } from "@/config/skills";
 import { getTraitBonuses } from "@/config/traits";
@@ -206,6 +214,7 @@ async function saveProgress(character, battle, questDeltas) {
 
   const priorLifetimeKills = progress.lifetimeKills ?? 0;
   const lifetimeKills = priorLifetimeKills + (questDeltas?.kills ?? 0);
+  const enhancementStones = (progress.enhancementStones ?? 0) + (questDeltas?.autoDisassembleStones ?? 0);
 
   let nextProgress = {
     // 가방 탭의 강화석, 성장 탭의 특성처럼, 모험 탭이 다루지 않는 값들은 그대로 보존한다.
@@ -216,6 +225,7 @@ async function saveProgress(character, battle, questDeltas) {
     regionIndex: battle.regionIndex,
     regionStage: battle.regionStage,
     unlockedRegionIndex: battle.unlockedRegionIndex,
+    enhancementStones,
     // 다음에 접속했을 때 이 시각을 기준으로 방치 보상을 계산한다.
     lastActiveAt: new Date().toISOString(),
     ...(quests ? { quests } : {}),
@@ -282,6 +292,8 @@ export default function AdventurePage() {
   const questKillsRef = useRef(0);
   // 마지막 저장 이후 쌓인, 몬스터 종류별 처치 수(도감용). { "forest:슬라임": 3, ... } 형태.
   const dexKillsRef = useRef({});
+  // 마지막 저장 이후 자동 분해로 쌓인 강화석 수.
+  const autoDisassembleStonesRef = useRef(0);
   // character(state)는 effect가 등록된 시점의 값을 그대로 들고 있어서(리렌더 시 재등록되지 않는 effect의
   // 클린업/인터벌 안에서는) 오래된 값일 수 있다. 저장할 때는 항상 이 ref로 최신 값을 읽어서,
   // 다른 탭에서 방금 바뀐 진행도(퀘스트 등)를 되돌려쓰지 않게 한다.
@@ -292,9 +304,15 @@ export default function AdventurePage() {
   }, [character]);
 
   function flushQuestDeltas(extra = {}) {
-    const deltas = { kills: questKillsRef.current, dex: dexKillsRef.current, ...extra };
+    const deltas = {
+      kills: questKillsRef.current,
+      dex: dexKillsRef.current,
+      autoDisassembleStones: autoDisassembleStonesRef.current,
+      ...extra,
+    };
     questKillsRef.current = 0;
     dexKillsRef.current = {};
+    autoDisassembleStonesRef.current = 0;
     return deltas;
   }
 
@@ -422,40 +440,51 @@ export default function AdventurePage() {
 
     if (next.droppedItem) {
       const drop = next.droppedItem;
-      const dropId = ++hitCounterRef.current;
-      supabase
-        .from("equipment")
-        .insert({
-          user_id: character.user_id,
-          slot: drop.slot,
-          grade: drop.grade,
-          options: drop.options,
-          set_id: drop.setId,
-          element: drop.element,
-          item_type: drop.itemType,
-          unique_effect: drop.uniqueEffect,
-        })
-        .then(({ error }) => {
-          if (error) {
-            console.error("장비 저장 실패:", error.message);
-            return;
-          }
-          setDrops((prev) => [...prev, { id: dropId, slot: drop.slot, grade: drop.grade, itemType: drop.itemType }]);
-          setTimeout(() => {
-            setDrops((prev) => prev.filter((d) => d.id !== dropId));
-          }, 3000);
+      const autoDisassembleGrades = characterRef.current?.progress?.autoDisassembleGrades ?? {};
 
-          if (drop.grade === "legendary" || drop.grade === "mythic") {
-            const gradeLabel = getGrade(drop.grade).label;
-            const itemLabel = getItemType(drop.slot, drop.itemType)?.label ?? getSlot(drop.slot).label;
-            postGuildNews(
-              character.user_id,
-              character.nickname,
-              `${character.nickname}님이 ${gradeLabel} 장비 [${itemLabel}]을 획득했습니다!`,
-              "legendary_drop"
-            );
-          }
-        });
+      if (autoDisassembleGrades[drop.grade]) {
+        // 설정에서 자동 분해로 켜둔 등급이면, 장비를 만들지 않고 바로 강화석으로 바꾼다.
+        // (새로 저장을 늘리지 않도록, 다음 저장 시점에 강화석만 함께 반영한다)
+        const stoneReward = getDisassembleReward(drop.grade);
+        autoDisassembleStonesRef.current += stoneReward;
+        setEventMessage(`${getGrade(drop.grade).label} 장비 자동 분해 (+${stoneReward}🔩)`);
+        setTimeout(() => setEventMessage(null), 1500);
+      } else {
+        const dropId = ++hitCounterRef.current;
+        supabase
+          .from("equipment")
+          .insert({
+            user_id: character.user_id,
+            slot: drop.slot,
+            grade: drop.grade,
+            options: drop.options,
+            set_id: drop.setId,
+            element: drop.element,
+            item_type: drop.itemType,
+            unique_effect: drop.uniqueEffect,
+          })
+          .then(({ error }) => {
+            if (error) {
+              console.error("장비 저장 실패:", error.message);
+              return;
+            }
+            setDrops((prev) => [...prev, { id: dropId, slot: drop.slot, grade: drop.grade, itemType: drop.itemType }]);
+            setTimeout(() => {
+              setDrops((prev) => prev.filter((d) => d.id !== dropId));
+            }, 3000);
+
+            if (drop.grade === "legendary" || drop.grade === "mythic") {
+              const gradeLabel = getGrade(drop.grade).label;
+              const itemLabel = getItemType(drop.slot, drop.itemType)?.label ?? getSlot(drop.slot).label;
+              postGuildNews(
+                character.user_id,
+                character.nickname,
+                `${character.nickname}님이 ${gradeLabel} 장비 [${itemLabel}]을 획득했습니다!`,
+                "legendary_drop"
+              );
+            }
+          });
+      }
     }
 
     if (next.droppedEgg) {

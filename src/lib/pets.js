@@ -1,5 +1,5 @@
 import { supabase } from "./supabaseClient";
-import { eggHatchHours, rollPetSpecies, getPetSpecies, getPetBonusValue } from "@/config/pets";
+import { eggHatchHours, rollPetSpecies, getPetSpecies, getPetBonusValue, petMaxStar } from "@/config/pets";
 
 export async function fetchPets(userId) {
   if (!userId) return [];
@@ -43,6 +43,20 @@ export async function deletePet(petId) {
   return { error };
 }
 
+// materialPetId(같은 종류의 다른 펫)를 재료로 써서 targetPetId의 별 등급을 올린다.
+export async function upgradePetStar(targetPet, materialPetId) {
+  if (targetPet.star >= petMaxStar) return { error: null };
+
+  const { error: deleteError } = await supabase.from("pets").delete().eq("id", materialPetId);
+  if (deleteError) return { error: deleteError };
+
+  const { error } = await supabase
+    .from("pets")
+    .update({ star: Math.min(petMaxStar, (targetPet.star ?? 1) + 1) })
+    .eq("id", targetPet.id);
+  return { error };
+}
+
 const emptyPetBonuses = {
   attackPercent: 0,
   goldFindPercent: 0,
@@ -57,7 +71,7 @@ export function getActivePetBonuses(pets) {
   if (!active) return emptyPetBonuses;
   const species = getPetSpecies(active.species_id);
   if (!species) return emptyPetBonuses;
-  const value = getPetBonusValue(active.species_id, active.level);
+  const value = getPetBonusValue(active.species_id, active.level, active.star ?? 1);
   return { ...emptyPetBonuses, [species.bonusType]: value };
 }
 

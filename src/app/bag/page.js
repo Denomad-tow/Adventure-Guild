@@ -29,7 +29,7 @@ import { getAchievement } from "@/config/achievements";
 import { applyAchievementUnlock } from "@/lib/achievements";
 import { fetchGuildTownBonuses } from "@/lib/guildTown";
 import { emptyGuildTownBonuses } from "@/config/guildTown";
-import { fetchPets, hatchEgg, equipPet, unequipPet } from "@/lib/pets";
+import { fetchPets, hatchEgg, equipPet, unequipPet, upgradePetStar } from "@/lib/pets";
 import { getUniqueEffect } from "@/config/uniqueEffects";
 import {
   getPetSpecies,
@@ -40,6 +40,7 @@ import {
   getPetFeedCost,
   petMaxLevel,
   petFeedExpGain,
+  petMaxStar,
 } from "@/config/pets";
 
 const rareOrBelowIndex = getGradeIndex("rare");
@@ -58,6 +59,7 @@ export default function BagPage() {
   const [guildBonuses, setGuildBonuses] = useState(emptyGuildTownBonuses);
   const [pets, setPets] = useState([]);
   const [petBusy, setPetBusy] = useState(null);
+  const [starPickerPetId, setStarPickerPetId] = useState(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   useEffect(() => {
@@ -130,6 +132,7 @@ export default function BagPage() {
   const bulkTargets = unequippedItems.filter((item) => bulkGrades.includes(item.grade));
   const bulkStoneTotal = bulkTargets.reduce((sum, item) => sum + getDisassembleReward(item.grade), 0);
   const activeSets = getActiveSetStatuses(items.filter((item) => item.equipped));
+  const autoDisassembleGrades = progress.autoDisassembleGrades ?? {};
 
   function toggleBulkGrade(gradeId) {
     setBulkGrades((prev) =>
@@ -143,6 +146,11 @@ export default function BagPage() {
       .update({ progress: { ...progress, ...patch } })
       .eq("user_id", character.user_id);
     await refreshCharacter();
+  }
+
+  async function toggleAutoDisassembleGrade(gradeId) {
+    const next = { ...autoDisassembleGrades, [gradeId]: !autoDisassembleGrades[gradeId] };
+    await updateProgress({ autoDisassembleGrades: next });
   }
 
   async function handleHatchEgg(pet) {
@@ -182,6 +190,16 @@ export default function BagPage() {
       ? await unequipPet(pet.id)
       : await equipPet(character.user_id, pet.id);
     if (error) console.error("펫 장착 실패:", error.message);
+    await loadPets(character.user_id);
+    setPetBusy(null);
+  }
+
+  async function handleUpgradePetStar(targetPet, materialPet) {
+    if (petBusy) return;
+    setPetBusy(targetPet.id);
+    const { error } = await upgradePetStar(targetPet, materialPet.id);
+    if (error) console.error("펫 별 강화 실패:", error.message);
+    setStarPickerPetId(null);
     await loadPets(character.user_id);
     setPetBusy(null);
   }
@@ -468,6 +486,29 @@ export default function BagPage() {
         </button>
       </div>
 
+      <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+        <p className="mb-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+          자동 분해 설정 (켜둔 등급은 장비를 얻는 즉시 강화석으로 바뀝니다)
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {grades.map((grade) => (
+            <button
+              key={grade.id}
+              type="button"
+              onClick={() => toggleAutoDisassembleGrade(grade.id)}
+              className="rounded-full border px-2.5 py-1 text-xs font-medium"
+              style={
+                autoDisassembleGrades[grade.id]
+                  ? { borderColor: grade.color, background: `${grade.color}22`, color: grade.color }
+                  : { borderColor: "rgba(161,161,170,0.4)", color: "#9ca3af" }
+              }
+            >
+              {grade.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* 보관함 (인벤토리 그리드) */}
       <div>
         <h2 className="mb-2 text-sm font-semibold text-zinc-950 dark:text-white">보관함</h2>
@@ -572,6 +613,12 @@ export default function BagPage() {
               const expToNext = getPetExpToNextLevel(pet.level);
               const isMax = pet.level >= petMaxLevel;
               const feedCost = isMax ? null : getPetFeedCost(pet.level);
+              const star = pet.star ?? 1;
+              const isStarMax = star >= petMaxStar;
+              const duplicatePets = pets.filter(
+                (p) => p.species_id === pet.species_id && p.id !== pet.id && !p.is_egg
+              );
+              const showStarPicker = starPickerPetId === pet.id;
               return (
                 <div key={pet.id} className="rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
                   <div className="flex items-center justify-between">
@@ -580,9 +627,10 @@ export default function BagPage() {
                       {pet.equipped && <span className="ml-1 text-xs text-sky-500">장착 중</span>}
                     </span>
                     <span className="text-xs text-emerald-500">
-                      {species?.bonusLabel} +{getPetBonusValue(pet.species_id, pet.level)}%
+                      {species?.bonusLabel} +{getPetBonusValue(pet.species_id, pet.level, star)}%
                     </span>
                   </div>
+                  <p className="mt-0.5 text-xs text-amber-500">{"⭐".repeat(star)}</p>
                   {!isMax && (
                     <div className="mt-1">
                       <ProgressBar
@@ -611,6 +659,38 @@ export default function BagPage() {
                       {pet.equipped ? "해제" : "장착"}
                     </button>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setStarPickerPetId(showStarPicker ? null : pet.id)}
+                    disabled={busy || isStarMax || duplicatePets.length === 0}
+                    className="mt-2 w-full rounded-lg border border-amber-400 py-1.5 text-xs font-medium text-amber-600 disabled:opacity-40 dark:border-amber-700 dark:text-amber-400"
+                  >
+                    {isStarMax
+                      ? "별 최대"
+                      : duplicatePets.length === 0
+                        ? "별 강화 (같은 펫 필요)"
+                        : `⭐ 별 강화 (동일 펫 ${duplicatePets.length}마리 보유)`}
+                  </button>
+                  {showStarPicker && (
+                    <div className="mt-1 flex flex-col gap-1 rounded-lg bg-white p-2 dark:bg-zinc-900">
+                      <p className="px-1 text-[11px] text-zinc-400">재료로 쓸 같은 펫을 골라주세요 (사라집니다)</p>
+                      {duplicatePets.map((material) => (
+                        <button
+                          key={material.id}
+                          type="button"
+                          onClick={() => handleUpgradePetStar(pet, material)}
+                          disabled={busy}
+                          className="flex items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        >
+                          <span>
+                            {getPetEmoji(material.species_id, material.level, false)} Lv.{material.level} (
+                            {"⭐".repeat(material.star ?? 1)})
+                          </span>
+                          <span className="text-amber-500">재료로 쓰기</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}

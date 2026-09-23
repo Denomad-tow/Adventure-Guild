@@ -67,6 +67,10 @@ export const petEvolveLevel2 = 20; // 전설
 export const petFeedStoneCostPerLevel = 5; // 먹이 1회 비용 = 강화석 × 현재 레벨
 export const petFeedExpGain = 10;
 
+// 별 등급: 같은 종류의 펫(중복)을 재료로 먹여서 올린다. 별 1개당 효과 +20%.
+export const petMaxStar = 5;
+export const petStarBonusPercentPerStar = 20;
+
 export function getPetExpToNextLevel(level) {
   return 10 * level;
 }
@@ -90,12 +94,13 @@ export function getPetEmoji(speciesId, level, isEgg) {
   return species.babyEmoji;
 }
 
-// 진화할수록(레벨 구간마다) 효과가 세진다.
-export function getPetBonusValue(speciesId, level) {
+// 진화(레벨 구간)와 별 등급(중복 펫으로 올림) 둘 다 효과에 반영된다.
+export function getPetBonusValue(speciesId, level, star = 1) {
   const species = getPetSpecies(speciesId);
   if (!species) return 0;
   const stageMultiplier = level >= petEvolveLevel2 ? 2 : level >= petEvolveLevel1 ? 1.5 : 1;
-  return Math.round(species.baseBonus * stageMultiplier * 10) / 10;
+  const starMultiplier = 1 + ((star ?? 1) - 1) * (petStarBonusPercentPerStar / 100);
+  return Math.round(species.baseBonus * stageMultiplier * starMultiplier * 10) / 10;
 }
 
 export function getPetFeedCost(level) {
