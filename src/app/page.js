@@ -885,7 +885,7 @@ export default function AdventurePage() {
       <BossResultModal result={bossResult} onClose={() => setBossResult(null)} />
 
       {eventMessage && (
-        <div className="rounded-lg bg-amber-100 px-4 py-2 text-center text-sm font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+        <div className="pointer-events-none fixed inset-x-4 bottom-20 z-40 mx-auto max-w-md rounded-lg bg-amber-100 px-4 py-2 text-center text-sm font-medium text-amber-700 shadow-lg dark:bg-amber-900/90 dark:text-amber-300">
           {eventMessage}
         </div>
       )}
