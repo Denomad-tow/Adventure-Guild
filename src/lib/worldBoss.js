@@ -83,6 +83,7 @@ export function computeChallengeDamage({
   recentChallengerCount = 0,
 }) {
   const acb = advancedClassBonuses ?? {
+    attackPercent: 0,
     attackSpeedPercent: 0,
     critRate: 0,
     critDamage: 0,
@@ -91,7 +92,9 @@ export function computeChallengeDamage({
   const ueb = equipBonuses.uniqueEffectBonuses ?? { elementAdvantageBonus: 0, critRate: 0 };
   const stats = jobBattleStats[job] ?? jobBattleStats.warrior;
   const baseAttack = getTotalAttack(job, level, enhanceLevel) + equipBonuses.attackFlat;
-  let attack = baseAttack * (1 + traitBonuses.attackPercent / 100);
+  let attack =
+    baseAttack *
+    (1 + (traitBonuses.attackPercent + (equipBonuses.attackPercent ?? 0) + (acb.attackPercent ?? 0)) / 100);
 
   const lord = getWorldBossLord(lordIndex);
   const weakness = weaknessOverride ?? lord.weakness;

@@ -33,6 +33,16 @@ export const relics = [
     baseCost: 1,
     costGrowth: 1.2,
   },
+  {
+    id: "enhanceCostReduction",
+    name: "현자의 지혜",
+    icon: "📘",
+    description: "능력치 강화 비용 감소",
+    effectPerLevel: 1,
+    suffix: "%",
+    baseCost: 1,
+    costGrowth: 1.25,
+  },
 ];
 
 export const relicMaxLevel = 30;

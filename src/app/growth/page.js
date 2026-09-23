@@ -29,7 +29,16 @@ import {
   enhanceBatchOptions,
 } from "@/config/balance";
 import { applyQuestDeltas } from "@/lib/quests";
-import { advancedClassLevel, getAdvancedClasses, getAdvancedClass } from "@/config/advancedClasses";
+import {
+  advancedClassLevel,
+  advancedClassTierLevels,
+  advancedClassTierLabels,
+  advancedClassTierBonus,
+  advancedClassTierUpgradeCost,
+  getAdvancedClasses,
+  getAdvancedClass,
+  getAdvancedClassName,
+} from "@/config/advancedClasses";
 import { regions } from "@/config/regions";
 import {
   prestigeRequiredRegionIndex,
@@ -83,7 +92,8 @@ export default function GrowthPage() {
   const progress = character.progress ?? {};
   const gold = progress.gold ?? 0;
   const enhanceLevel = progress.enhanceLevel ?? 0;
-  const totalCost = getEnhanceTotalCost(enhanceLevel, count);
+  const relicBonusesForCost = getRelicBonuses(progress.relics);
+  const totalCost = getEnhanceTotalCost(enhanceLevel, count, relicBonusesForCost.enhanceCostReductionPercent);
   const currentAttack = getTotalAttack(character.job, character.level, enhanceLevel) + equipAttackBonus;
   const nextAttack = getTotalAttack(character.job, character.level, enhanceLevel + count) + equipAttackBonus;
   const canAfford = gold >= totalCost;
@@ -100,6 +110,13 @@ export default function GrowthPage() {
   const chosenAdvancedClass = progress.advancedClass
     ? getAdvancedClass(character.job, progress.advancedClass)
     : null;
+  const advancedClassTier = progress.advancedClassTier ?? 1;
+  const nextTierIndex = advancedClassTier; // 배열 인덱스 = 다음 단계 - 1
+  const hasNextTier = nextTierIndex < advancedClassTierLevels.length;
+  const nextTierLevelReq = hasNextTier ? advancedClassTierLevels[nextTierIndex] : null;
+  const nextTierCost = hasNextTier ? advancedClassTierUpgradeCost[nextTierIndex] : null;
+  const canUpgradeTier =
+    hasNextTier && character.level >= nextTierLevelReq && gold >= nextTierCost;
 
   const soulStones = progress.soulStones ?? 0;
   const relicLevels = progress.relics ?? {};
@@ -186,7 +203,25 @@ export default function GrowthPage() {
     setAdvancedClassBusy(true);
     await supabase
       .from("characters")
-      .update({ progress: { ...progress, advancedClass: classId } })
+      .update({ progress: { ...progress, advancedClass: classId, advancedClassTier: 1 } })
+      .eq("user_id", character.user_id);
+    await refreshCharacter();
+    setAdvancedClassBusy(false);
+  }
+
+  // 2차/3차 전직: 새 갈래가 아니라 지금 고른 갈래의 효과 배율을 키우는 승급.
+  async function handleUpgradeAdvancedClassTier() {
+    if (advancedClassBusy || !canUpgradeTier) return;
+    setAdvancedClassBusy(true);
+    await supabase
+      .from("characters")
+      .update({
+        progress: {
+          ...progress,
+          gold: gold - nextTierCost,
+          advancedClassTier: advancedClassTier + 1,
+        },
+      })
       .eq("user_id", character.user_id);
     await refreshCharacter();
     setAdvancedClassBusy(false);
@@ -220,6 +255,7 @@ export default function GrowthPage() {
       skillLevels: {},
       enhancementStones: 0,
       advancedClass: null,
+      advancedClassTier: null,
       lastActiveAt: new Date().toISOString(),
     };
 
@@ -272,11 +308,14 @@ export default function GrowthPage() {
         <span className="text-3xl">{job.emoji}</span>
         <div>
           <p className="font-semibold text-zinc-950 dark:text-white">
-            {prestigeCount > 0 && <span className="mr-1 text-amber-500">{"⭐".repeat(Math.min(prestigeCount, 5))}</span>}
+            {prestigeCount > 0 && <span className="mr-1 text-amber-500">⭐×{prestigeCount}</span>}
             {character.nickname} · Lv.{character.level}
           </p>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            {chosenAdvancedClass ? `${job.label} · ${chosenAdvancedClass.name}` : job.label} · 강화 +{enhanceLevel}
+            {chosenAdvancedClass
+              ? `${job.label} · ${getAdvancedClassName(character.job, progress.advancedClass, advancedClassTier)}`
+              : job.label}{" "}
+            · 강화 +{enhanceLevel}
           </p>
         </div>
       </div>
@@ -328,6 +367,12 @@ export default function GrowthPage() {
           <span className="text-zinc-500 dark:text-zinc-400">보유 골드</span>
           <span className="font-semibold text-amber-500">{formatNumber(gold)} G</span>
         </div>
+
+        {relicBonusesForCost.enhanceCostReductionPercent > 0 && (
+          <p className="mt-1 text-right text-xs text-purple-500">
+            📘 현자의 지혜로 강화 비용 -{relicBonusesForCost.enhanceCostReductionPercent}% 적용 중
+          </p>
+        )}
 
         <button
           type="button"
@@ -488,8 +533,39 @@ export default function GrowthPage() {
           </p>
         ) : chosenAdvancedClass ? (
           <div className="mt-2 rounded-lg bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-900">
-            <p className="font-semibold text-emerald-500">{chosenAdvancedClass.name}</p>
+            <p className="font-semibold text-emerald-500">
+              {getAdvancedClassName(character.job, progress.advancedClass, advancedClassTier)}{" "}
+              <span className="text-xs font-normal text-zinc-400">
+                ({advancedClassTierLabels[advancedClassTier - 1]} 전직)
+              </span>
+            </p>
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{chosenAdvancedClass.description}</p>
+            {advancedClassTier > 1 && (
+              <p className="mt-1 text-xs text-sky-500">
+                승급 공통 효과: 공격력 +{advancedClassTierBonus[advancedClassTier - 1].attackPercent}%, 공격속도 +
+                {advancedClassTierBonus[advancedClassTier - 1].attackSpeedPercent}%
+              </p>
+            )}
+            {hasNextTier && (
+              <>
+                <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                  {advancedClassTierLabels[nextTierIndex]} 전직 →{" "}
+                  <span className="font-semibold text-zinc-600 dark:text-zinc-300">
+                    {getAdvancedClassName(character.job, progress.advancedClass, advancedClassTier + 1)}
+                  </span>{" "}
+                  (레벨 {nextTierLevelReq} · {formatNumber(nextTierCost)} G)
+                  {character.level < nextTierLevelReq && ` · 현재 Lv.${character.level}`}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleUpgradeAdvancedClassTier}
+                  disabled={advancedClassBusy || !canUpgradeTier}
+                  className="mt-2 w-full rounded-lg border border-emerald-400 py-1.5 text-xs font-medium text-emerald-600 disabled:opacity-40 dark:border-emerald-700 dark:text-emerald-400"
+                >
+                  {advancedClassTierLabels[nextTierIndex]}로 승급하기
+                </button>
+              </>
+            )}
           </div>
         ) : (
           <>

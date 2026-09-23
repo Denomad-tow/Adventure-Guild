@@ -22,6 +22,9 @@ import {
   rollItemEnhanceSuccess,
   maxItemEnhanceLevel,
   enhanceFailureStartLevel,
+  getReforgeCost,
+  rerollOption,
+  getOptionRange,
 } from "@/config/equipment";
 import { getElement } from "@/config/elements";
 import { postGuildNews } from "@/lib/guildNews";
@@ -32,6 +35,7 @@ import { emptyGuildTownBonuses } from "@/config/guildTown";
 import { fetchPets, hatchEgg, equipPet, unequipPet, upgradePetStar } from "@/lib/pets";
 import { getUniqueEffect } from "@/config/uniqueEffects";
 import {
+  petSpecies,
   getPetSpecies,
   getPetEmoji,
   getPetStageName,
@@ -41,6 +45,7 @@ import {
   petMaxLevel,
   petFeedExpGain,
   petMaxStar,
+  petEvolveLevel2,
 } from "@/config/pets";
 
 const rareOrBelowIndex = getGradeIndex("rare");
@@ -56,10 +61,12 @@ export default function BagPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkGrades, setBulkGrades] = useState(defaultBulkGrades);
   const [enhanceResult, setEnhanceResult] = useState(null);
+  const [reforgeBusy, setReforgeBusy] = useState(null);
   const [guildBonuses, setGuildBonuses] = useState(emptyGuildTownBonuses);
   const [pets, setPets] = useState([]);
   const [petBusy, setPetBusy] = useState(null);
   const [starPickerPetId, setStarPickerPetId] = useState(null);
+  const [showPetDex, setShowPetDex] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   useEffect(() => {
@@ -312,6 +319,21 @@ export default function BagPage() {
     }
   }
 
+  // 재련: 장비 하나의 옵션 하나를 골라 강화석+골드를 써서 새로 뽑는다. 실패는 없다.
+  async function handleReforgeOption(item, optionIndex) {
+    if (reforgeBusy) return;
+    const cost = getReforgeCost(item.grade);
+    if (stones < cost.stones || gold < cost.gold) return;
+    setReforgeBusy(item.id);
+    const nextOptions = rerollOption(item.options ?? [], optionIndex, item.grade);
+    const { error } = await supabase.from("equipment").update({ options: nextOptions }).eq("id", item.id);
+    if (!error) {
+      await updateProgress({ enhancementStones: stones - cost.stones, gold: gold - cost.gold });
+      await loadItems(character.user_id);
+    }
+    setReforgeBusy(null);
+  }
+
   async function handleBulkDisassemble() {
     if (bulkTargets.length === 0) return;
     setBulkBusy(true);
@@ -410,10 +432,10 @@ export default function BagPage() {
                 <span className="text-xs font-medium text-emerald-500">
                   {bonus
                     ? Object.entries(bonus)
-                        .map(
-                          ([type, value]) =>
-                            `${getOptionType(type)?.label ?? type} +${value}${getOptionType(type)?.suffix ?? ""}`
-                        )
+                        .map(([type, value]) => {
+                          if (type === "attackPercent") return `공격력 +${value}%`;
+                          return `${getOptionType(type)?.label ?? type} +${value}${getOptionType(type)?.suffix ?? ""}`;
+                        })
                         .join(", ")
                     : `2개부터 효과 발동 (${2 - set.count}개 더 필요)`}
                 </span>
@@ -569,7 +591,70 @@ export default function BagPage() {
 
       {/* 펫 */}
       <div>
-        <h2 className="mb-2 text-sm font-semibold text-zinc-950 dark:text-white">펫</h2>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">펫</h2>
+          <button
+            type="button"
+            onClick={() => setShowPetDex((prev) => !prev)}
+            className="rounded-full bg-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+          >
+            📖 펫 도감 {showPetDex ? "닫기" : "보기"}
+          </button>
+        </div>
+
+        {showPetDex &&
+          (() => {
+            const bestBySpecies = {};
+            for (const pet of pets) {
+              if (pet.is_egg) {
+                if (!bestBySpecies[pet.species_id]) bestBySpecies[pet.species_id] = { eggOnly: true };
+                continue;
+              }
+              const existing = bestBySpecies[pet.species_id];
+              if (!existing || existing.eggOnly || (pet.level ?? 0) > (existing.level ?? 0)) {
+                bestBySpecies[pet.species_id] = pet;
+              }
+            }
+            const ownedCount = petSpecies.filter((s) => bestBySpecies[s.id]).length;
+            return (
+              <div className="mb-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+                <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+                  수집 현황 {ownedCount} / {petSpecies.length}
+                </p>
+                <div className="flex flex-col gap-1.5">
+                  {petSpecies.map((species) => {
+                    const owned = bestBySpecies[species.id];
+                    return (
+                      <div
+                        key={species.id}
+                        className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm ${
+                          owned
+                            ? "bg-zinc-100 dark:bg-zinc-900"
+                            : "bg-zinc-50 text-zinc-400 dark:bg-zinc-950 dark:text-zinc-600"
+                        }`}
+                      >
+                        <span>
+                          {owned && !owned.eggOnly ? species.finalEmoji : species.emoji}{" "}
+                          <span className={owned ? "text-zinc-950 dark:text-white" : ""}>{species.name}</span>
+                          <span className="ml-1 text-xs text-zinc-400">
+                            ({species.bonusLabel} 최대 +{getPetBonusValue(species.id, petEvolveLevel2, petMaxStar)}%)
+                          </span>
+                        </span>
+                        <span className="text-xs font-medium">
+                          {!owned
+                            ? "미보유"
+                            : owned.eggOnly
+                              ? "🥚 알 보유 중"
+                              : `보유 중 · ${getPetStageName(owned.level)} Lv.${owned.level} ${"⭐".repeat(owned.star ?? 1)}`}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
         {pets.length === 0 ? (
           <p className="text-center text-sm text-zinc-400">
             아직 알이나 펫이 없습니다. 사냥 중 아주 낮은 확률로 알을 얻을 수 있어요.
@@ -756,21 +841,45 @@ export default function BagPage() {
             </div>
 
             {selectedItem.options?.length > 0 && (
-              <div className="mt-3 flex flex-col gap-1 rounded-lg bg-zinc-100 p-3 text-sm dark:bg-zinc-800">
-                {selectedItem.options.map((opt, idx) => {
-                  const optionType = getOptionType(opt.type);
-                  return (
-                    <div key={idx} className="flex justify-between">
-                      <span className="text-zinc-500 dark:text-zinc-400">
-                        {optionType?.label ?? opt.type}
-                      </span>
-                      <span className="font-medium text-zinc-950 dark:text-white">
-                        +{opt.value}
-                        {optionType?.suffix ?? ""}
-                      </span>
-                    </div>
-                  );
-                })}
+              <div className="mt-3 flex flex-col gap-1.5 rounded-lg bg-zinc-100 p-3 text-sm dark:bg-zinc-800">
+                {(() => {
+                  const reforgeCost = getReforgeCost(selectedItem.grade);
+                  const canReforge = stones >= reforgeCost.stones && gold >= reforgeCost.gold;
+                  return selectedItem.options.map((opt, idx) => {
+                    const optionType = getOptionType(opt.type);
+                    const range = getOptionRange(opt.type, selectedItem.grade);
+                    return (
+                      <div key={idx} className="flex items-center justify-between gap-2">
+                        <span className="text-zinc-500 dark:text-zinc-400">
+                          {optionType?.label ?? opt.type}
+                          <span className="ml-1 text-[10px] text-zinc-400">
+                            (이 등급 최대 {range.max}
+                            {optionType?.suffix ?? ""})
+                          </span>
+                        </span>
+                        <span className="flex items-center gap-2">
+                          <span className="font-medium text-zinc-950 dark:text-white">
+                            +{opt.value}
+                            {optionType?.suffix ?? ""}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleReforgeOption(selectedItem, idx)}
+                            disabled={reforgeBusy === selectedItem.id || !canReforge}
+                            title={`재련 (🔩${reforgeCost.stones} · ${formatNumber(reforgeCost.gold)}G)`}
+                            className="rounded-md border border-purple-400 px-1.5 py-0.5 text-[10px] font-medium text-purple-500 disabled:opacity-30 dark:border-purple-700 dark:text-purple-400"
+                          >
+                            🔨 재련
+                          </button>
+                        </span>
+                      </div>
+                    );
+                  });
+                })()}
+                <p className="mt-1 text-right text-[10px] text-zinc-400">
+                  재련: 옵션 하나를 새로 뽑습니다 (🔩{getReforgeCost(selectedItem.grade).stones} ·{" "}
+                  {formatNumber(getReforgeCost(selectedItem.grade).gold)}G, 실패 없음)
+                </p>
               </div>
             )}
 

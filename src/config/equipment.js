@@ -14,38 +14,56 @@ export const equipmentSets = [
   {
     id: "mine",
     name: "해골 광부 세트",
-    bonus2: { attackFlat: 10 },
+    bonus2: { attackPercent: 3 },
     bonus4: { critRate: 5 },
   },
   {
     id: "swamp",
     name: "늪지 사냥꾼 세트",
     bonus2: { critDamage: 10 },
-    bonus4: { attackFlat: 25 },
+    bonus4: { attackPercent: 8 },
   },
   {
     id: "canyon",
     name: "화염 정령 세트",
-    bonus2: { attackFlat: 15 },
+    bonus2: { attackPercent: 5 },
     bonus4: { critDamage: 15 },
   },
   {
     id: "citadel",
     name: "서리 사냥꾼 세트",
     bonus2: { critRate: 5 },
-    bonus4: { attackFlat: 35 },
+    bonus4: { attackPercent: 10 },
   },
   {
     id: "sky",
     name: "천공 기사 세트",
     bonus2: { critRate: 7 },
-    bonus4: { attackFlat: 45 },
+    bonus4: { attackPercent: 12 },
   },
   {
     id: "rift",
     name: "균열 수호자 세트",
     bonus2: { critDamage: 20 },
-    bonus4: { attackFlat: 55 },
+    bonus4: { attackPercent: 15 },
+  },
+  {
+    id: "dragonNest",
+    name: "홍룡 사냥꾼 세트",
+    bonus2: { critRate: 8 },
+    bonus4: { attackPercent: 18 },
+  },
+  {
+    id: "sunkenRuins",
+    name: "심해 탐험가 세트",
+    bonus2: { attackPercent: 8 },
+    bonus4: { critDamage: 25 },
+  },
+  {
+    id: "starTemple",
+    name: "별의 수호자 세트",
+    bonus2: { critDamage: 22 },
+    bonus4: { attackPercent: 20 },
   },
 ];
 
@@ -159,12 +177,37 @@ export const grades = [
 ];
 
 // 장비에 붙는 랜덤 옵션 종류. value의 의미: attackFlat=공격력 그대로 더함, 나머지는 %포인트.
+// min/max는 "고급" 등급 기준이고, 실제로 붙는 값은 등급별 배율(optionGradeMultiplier)만큼 커진다.
 export const optionTypes = [
   { id: "attackFlat", label: "공격력", min: 1, max: 5, suffix: "" },
   { id: "critRate", label: "치명타 확률", min: 1, max: 4, suffix: "%" },
   { id: "critDamage", label: "치명타 피해", min: 3, max: 10, suffix: "%" },
   { id: "goldFind", label: "골드 획득", min: 3, max: 10, suffix: "%" },
 ];
+
+// 등급이 높을수록 같은 옵션이라도 최대치가 커진다 (일반은 옵션이 아예 안 붙으므로 목록에서 제외).
+export const optionGradeMultiplier = {
+  uncommon: 1,
+  rare: 1.3,
+  epic: 1.7,
+  legendary: 2.3,
+  mythic: 3,
+};
+
+export function getOptionGradeMultiplier(gradeId) {
+  return optionGradeMultiplier[gradeId] ?? 1;
+}
+
+// 이 등급에서 이 옵션이 나올 수 있는 실제 최소~최대 값 (재련 화면에서 "최대치 확인용"으로 쓴다)
+export function getOptionRange(optionTypeId, gradeId) {
+  const type = getOptionType(optionTypeId);
+  if (!type) return { min: 0, max: 0 };
+  const multiplier = getOptionGradeMultiplier(gradeId);
+  return {
+    min: Math.round(type.min * multiplier),
+    max: Math.round(type.max * multiplier),
+  };
+}
 
 // 몬스터를 잡을 때마다 장비가 나올 확률
 export const equipDropChance = 0.15;
@@ -191,6 +234,32 @@ export function getItemEnhanceSuccessRate(currentLevel, bonusPercent = 0) {
   if (currentLevel < enhanceFailureStartLevel) return 1;
   const base = enhanceSuccessRates[currentLevel - enhanceFailureStartLevel] ?? 0.1;
   return Math.min(1, base + bonusPercent / 100);
+}
+
+// 재련: 옵션 하나를 골라 새로 굴린다 (실패 없음, 종류·수치가 그대로일 수도 더 좋아질 수도 있다).
+// 등급이 높은 장비일수록 옵션이 더 세게 나올 수 있어서 재련 값어치가 크다 → 강화석/골드를 더 요구한다.
+export const reforgeStoneCostByGrade = [2, 3, 5, 8, 15, 25];
+export const reforgeGoldCostByGrade = [100, 300, 1000, 3000, 10000, 30000];
+
+export function getReforgeCost(gradeId) {
+  const index = getGradeIndex(gradeId);
+  return {
+    stones: reforgeStoneCostByGrade[index] ?? reforgeStoneCostByGrade[0],
+    gold: reforgeGoldCostByGrade[index] ?? reforgeGoldCostByGrade[0],
+  };
+}
+
+// optionIndex번째 옵션을 다른 종류(이 장비에 없는 종류 중 하나)로 새로 뽑는다.
+// gradeId에 따라 값의 범위가 달라진다 (등급이 높을수록 더 세게 나올 수 있음).
+export function rerollOption(options, optionIndex, gradeId) {
+  const otherTypes = options.filter((_, i) => i !== optionIndex).map((o) => o.type);
+  const pool = optionTypes.filter((o) => !otherTypes.includes(o.id));
+  const chosen = pool[Math.floor(Math.random() * pool.length)] ?? getOptionType(options[optionIndex].type);
+  const multiplier = getOptionGradeMultiplier(gradeId);
+  const value = Math.round((chosen.min + Math.random() * (chosen.max - chosen.min)) * multiplier);
+  const next = [...options];
+  next[optionIndex] = { type: chosen.id, value };
+  return next;
 }
 
 // 강화 시도 결과(성공/실패)를 굴린다.
@@ -226,12 +295,13 @@ function rollGrade() {
 
 function rollOptions(gradeId) {
   const grade = getGrade(gradeId);
+  const multiplier = getOptionGradeMultiplier(gradeId);
   const pool = [...optionTypes];
   const picked = [];
   for (let i = 0; i < grade.optionCount && pool.length > 0; i += 1) {
     const idx = Math.floor(Math.random() * pool.length);
     const optionType = pool.splice(idx, 1)[0];
-    const value = Math.round(optionType.min + Math.random() * (optionType.max - optionType.min));
+    const value = Math.round((optionType.min + Math.random() * (optionType.max - optionType.min)) * multiplier);
     picked.push({ type: optionType.id, value });
   }
   return picked;
@@ -294,7 +364,7 @@ export function getMerchantPrice(gradeId, priceMultiplier) {
 // 장착 중인 장비 목록을 넣으면, 전투에 실제로 반영할 보너스 합계를 계산해준다.
 // (개별 강화 단계와 세트 효과까지 모두 반영)
 export function getEquipmentStatBonuses(equippedItems) {
-  const bonuses = { attackFlat: 0, critRate: 0, critDamage: 0, goldFind: 0 };
+  const bonuses = { attackFlat: 0, attackPercent: 0, critRate: 0, critDamage: 0, goldFind: 0 };
   const setCounts = {};
 
   for (const item of equippedItems) {

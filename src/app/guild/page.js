@@ -42,6 +42,7 @@ const reactionEmojis = ["👏", "😂", "😭", "🔥"];
 const NEWS_LIMIT = 30;
 const emptyEquipBonuses = {
   attackFlat: 0,
+  attackPercent: 0,
   critRate: 0,
   critDamage: 0,
   goldFind: 0,
@@ -92,6 +93,7 @@ export default function GuildPage() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
+  const chatEndRef = useRef(null);
 
   useEffect(() => {
     if (!character?.user_id) return undefined;
@@ -101,6 +103,11 @@ export default function GuildPage() {
     });
     return unsubscribe;
   }, [character?.user_id]);
+
+  // 새 메시지가 오면(내가 보낸 것 포함) 항상 맨 아래로 스크롤해서, 스크롤을 안 내려도 바로 보이게 한다.
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ block: "end" });
+  }, [chatMessages]);
 
   async function handleSendChat(e) {
     e.preventDefault();
@@ -319,7 +326,11 @@ export default function GuildPage() {
       bossState.phase_event_until && new Date(bossState.phase_event_until).getTime() > Date.now()
     );
     const { equipBonuses, traitBonuses } = combatStatsRef.current;
-    const advancedClassBonuses = getAdvancedClassBonuses(character.job, character.progress?.advancedClass);
+    const advancedClassBonuses = getAdvancedClassBonuses(
+      character.job,
+      character.progress?.advancedClass,
+      character.progress?.advancedClassTier ?? 1
+    );
     const currentLord = getWorldBossLord(bossState.lord_index);
     const weaknessOverride = currentLord.id === "illusion" ? rollIllusionWeakness() : null;
     const recentChallengerCount =
@@ -415,7 +426,11 @@ export default function GuildPage() {
     const { error } = await sendCheer(character.user_id, character.nickname, receiver.user_id);
     if (!error) {
       const progress = character.progress ?? {};
-      const advancedClassBonuses = getAdvancedClassBonuses(character.job, progress.advancedClass);
+      const advancedClassBonuses = getAdvancedClassBonuses(
+        character.job,
+        progress.advancedClass,
+        progress.advancedClassTier ?? 1
+      );
       const contributionGain = Math.round(
         cheerContributionReward * (1 + advancedClassBonuses.guildContributionPercent / 100)
       );
@@ -560,6 +575,7 @@ export default function GuildPage() {
               </p>
             ))
           )}
+          <div ref={chatEndRef} />
         </div>
         <form onSubmit={handleSendChat} className="mt-2 flex gap-2">
           <input

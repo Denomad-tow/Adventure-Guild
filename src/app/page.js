@@ -67,10 +67,13 @@ import {
   stagesPerRegion,
   killsPerStage,
   eliteMultiplier,
+  regionDifficultyTiers,
+  getRegionDifficultyTier,
 } from "@/config/balance";
 
 const emptyEquipBonuses = {
   attackFlat: 0,
+  attackPercent: 0,
   critRate: 0,
   critDamage: 0,
   goldFind: 0,
@@ -101,8 +104,8 @@ function getProcHits(equipBonuses, attack, baseDamage, isCrit) {
 }
 const emptyTraitBonuses = { attackPercent: 0, attackSpeedPercent: 0, goldFindPercent: 0, dropChancePercent: 0 };
 
-function initialMonsterState(regionIndex, stage) {
-  const hp = getStageMonsterHp(regionIndex, stage);
+function initialMonsterState(regionIndex, stage, difficultyMultiplier = 1) {
+  const hp = getStageMonsterHp(regionIndex, stage, difficultyMultiplier);
   return { monsterMaxHp: hp, monsterHp: hp };
 }
 
@@ -117,6 +120,7 @@ const initialBattleState = {
   isElite: false,
   regionStage: regions.map(() => 1),
   unlockedRegionIndex: 0,
+  difficultyTier: "normal",
   equipBonuses: emptyEquipBonuses,
   traitBonuses: emptyTraitBonuses,
   ...initialMonsterState(0, 1),
@@ -130,7 +134,8 @@ function applyHit(state, damage) {
     return { ...state, monsterHp: remainingHp };
   }
 
-  const baseReward = getStageMonsterReward(state.regionIndex, state.stage);
+  const difficultyMultiplier = getRegionDifficultyTier(state.difficultyTier ?? "normal").multiplier;
+  const baseReward = getStageMonsterReward(state.regionIndex, state.stage, difficultyMultiplier);
   const reward = state.isElite
     ? { gold: baseReward.gold * eliteMultiplier, exp: baseReward.exp * eliteMultiplier }
     : baseReward;
@@ -184,7 +189,7 @@ function applyHit(state, damage) {
   }
   const isElite = killIndexInStage >= killsPerStage;
 
-  const baseHp = getStageMonsterHp(state.regionIndex, stage);
+  const baseHp = getStageMonsterHp(state.regionIndex, stage, difficultyMultiplier);
   const monsterMaxHp = isElite ? baseHp * eliteMultiplier : baseHp;
 
   return {
@@ -225,6 +230,7 @@ async function saveProgress(character, battle, questDeltas) {
     regionIndex: battle.regionIndex,
     regionStage: battle.regionStage,
     unlockedRegionIndex: battle.unlockedRegionIndex,
+    difficultyTier: battle.difficultyTier,
     enhancementStones,
     // 다음에 접속했을 때 이 시각을 기준으로 방치 보상을 계산한다.
     lastActiveAt: new Date().toISOString(),
@@ -276,6 +282,7 @@ export default function AdventurePage() {
   const [remainingHires, setRemainingHires] = useState(mercenaryDailyLimit);
   const [showMercenaryPicker, setShowMercenaryPicker] = useState(false);
   const [selectedMercenary, setSelectedMercenary] = useState(null);
+  const [showBuffPanel, setShowBuffPanel] = useState(false);
 
   const loadedRef = useRef(false);
   // ready(state)는 렌더링용이고, readyRef는 이 값이 정말 최신인지 클린업(언마운트) 시점에서도
@@ -351,10 +358,15 @@ export default function AdventurePage() {
         isElite: false,
         regionStage,
         unlockedRegionIndex: progress.unlockedRegionIndex ?? 0,
+        difficultyTier: progress.difficultyTier ?? "normal",
         traitBonuses: getTraitBonuses(progress.traits),
         skillLevels: progress.skillLevels ?? {},
         monsterDex: progress.monsterDex ?? {},
-        advancedClassBonuses: getAdvancedClassBonuses(character.job, progress.advancedClass),
+        advancedClassBonuses: getAdvancedClassBonuses(
+          character.job,
+          progress.advancedClass,
+          progress.advancedClassTier ?? 1
+        ),
         relicBonuses: getRelicBonuses(progress.relics),
         prestigeCount: progress.prestigeCount ?? 0,
       };
@@ -373,7 +385,7 @@ export default function AdventurePage() {
             cheerBuffActive,
             guildBonuses: guildBonuses ?? emptyGuildTownBonuses,
             petBonuses: getActivePetBonuses(pets),
-            ...initialMonsterState(regionIndex, stage),
+            ...initialMonsterState(regionIndex, stage, getRegionDifficultyTier(loaded.difficultyTier).multiplier),
           };
           battleRef.current = state;
           setBattle(state);
@@ -532,7 +544,7 @@ export default function AdventurePage() {
       const tb = current.traitBonuses ?? emptyTraitBonuses;
       const acb = current.advancedClassBonuses ?? emptyAdvancedClassBonuses;
       const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
-      let attack = baseAttack * (1 + tb.attackPercent / 100);
+      let attack = baseAttack * (1 + (tb.attackPercent + equipBonuses.attackPercent + acb.attackPercent) / 100);
       const region = regions[current.regionIndex];
       if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
         attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus + ueb.elementAdvantageBonus;
@@ -578,7 +590,7 @@ export default function AdventurePage() {
       const tb = current.traitBonuses ?? emptyTraitBonuses;
       const acb = current.advancedClassBonuses ?? emptyAdvancedClassBonuses;
       const baseAttack = getTotalAttack(character.job, current.level, current.enhanceLevel) + equipBonuses.attackFlat;
-      let attack = baseAttack * (1 + tb.attackPercent / 100);
+      let attack = baseAttack * (1 + (tb.attackPercent + equipBonuses.attackPercent + acb.attackPercent) / 100);
       const region = regions[current.regionIndex];
       if (hasElementAdvantage(equipBonuses.weaponElement, region.element)) {
         attack *= elementAdvantageMultiplier + acb.elementAdvantageBonus + ueb.elementAdvantageBonus;
@@ -706,7 +718,8 @@ export default function AdventurePage() {
     const equipBonuses = current.equipBonuses ?? emptyEquipBonuses;
     const traitBonuses = current.traitBonuses ?? emptyTraitBonuses;
     const goldMultiplier = 1 + (equipBonuses.goldFind + traitBonuses.goldFindPercent) / 100;
-    const baseReward = getStageMonsterReward(current.regionIndex, current.stage);
+    const difficultyMultiplier = getRegionDifficultyTier(current.difficultyTier ?? "normal").multiplier;
+    const baseReward = getStageMonsterReward(current.regionIndex, current.stage, difficultyMultiplier);
     const bonusGold = Math.round(baseReward.gold * goblinGoldRewardMultiplier * goldMultiplier);
     const next = { ...current, gold: current.gold + bonusGold };
     battleRef.current = next;
@@ -738,10 +751,25 @@ export default function AdventurePage() {
       stage,
       killIndexInStage: 0,
       isElite: false,
-      ...initialMonsterState(index, stage),
+      ...initialMonsterState(index, stage, getRegionDifficultyTier(current.difficultyTier ?? "normal").multiplier),
     };
     battleRef.current = next;
     setBattle(next);
+  }
+
+  // 난이도(기본/강화/초월)를 바꾸면 지금 상대하는 몬스터 체력도 즉시 새 배율로 다시 계산한다.
+  function handleSelectDifficulty(tierId) {
+    const current = battleRef.current;
+    if (current.difficultyTier === tierId || bossFightingRef.current) return;
+    const multiplier = getRegionDifficultyTier(tierId).multiplier;
+    const next = {
+      ...current,
+      difficultyTier: tierId,
+      ...initialMonsterState(current.regionIndex, current.stage, multiplier),
+    };
+    battleRef.current = next;
+    setBattle(next);
+    saveProgress(characterRef.current, next, flushQuestDeltas()).then(() => refreshCharacter());
   }
 
   async function challengeBoss() {
@@ -754,7 +782,8 @@ export default function AdventurePage() {
 
     const regionIndex = current.regionIndex;
     const region = regions[regionIndex];
-    const maxHp = getBossHp(regionIndex);
+    const difficultyMultiplier = getRegionDifficultyTier(current.difficultyTier ?? "normal").multiplier;
+    const maxHp = getBossHp(regionIndex, difficultyMultiplier);
     setBossFightHp({ hp: maxHp, maxHp });
 
     const hits = 5;
@@ -768,7 +797,7 @@ export default function AdventurePage() {
     }
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    const baseReward = getBossReward(regionIndex);
+    const baseReward = getBossReward(regionIndex, difficultyMultiplier);
     const reward = {
       gold: Math.round(baseReward.gold * (1 + rewardBonusPercent / 100)),
       exp: Math.round(baseReward.exp * (1 + rewardBonusPercent / 100)),
@@ -809,7 +838,7 @@ export default function AdventurePage() {
       regionStage,
       killIndexInStage: 0,
       isElite: false,
-      ...initialMonsterState(nextRegionIndex, nextStage),
+      ...initialMonsterState(nextRegionIndex, nextStage, difficultyMultiplier),
     };
 
     battleRef.current = next;
@@ -869,7 +898,7 @@ export default function AdventurePage() {
     getCompletedRegionCount(battle.monsterDex, regions) * regionDexCompleteBonusPercent;
   const attack =
     (getTotalAttack(character.job, battle.level, battle.enhanceLevel) + equipBonuses.attackFlat) *
-    (1 + traitBonuses.attackPercent / 100) *
+    (1 + (traitBonuses.attackPercent + equipBonuses.attackPercent + advancedClassBonuses.attackPercent) / 100) *
     (hasAdvantage
       ? elementAdvantageMultiplier + advancedClassBonuses.elementAdvantageBonus + uniqueEffectBonuses.elementAdvantageBonus
       : 1) *
@@ -884,6 +913,133 @@ export default function AdventurePage() {
       <CheerNotificationModal cheers={cheerNotifications} onClose={clearCheerNotifications} />
       <BossResultModal result={bossResult} onClose={() => setBossResult(null)} />
 
+      {showBuffPanel && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6"
+          onClick={() => setShowBuffPanel(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white p-5 text-sm shadow-xl dark:bg-zinc-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <span className="font-semibold text-zinc-950 dark:text-white">
+                내 능력치 상세 (공격력 {formatNumber(attack)})
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowBuffPanel(false)}
+                className="text-xs text-zinc-400"
+              >
+                닫기
+              </button>
+            </div>
+            <ul className="flex flex-col gap-1.5 text-zinc-600 dark:text-zinc-300">
+              <li className="flex justify-between">
+                <span>기본 공격력 (레벨 {battle.level})</span>
+                <span>{formatNumber(getTotalAttack(character.job, battle.level, battle.enhanceLevel) - getEnhanceAttackBonus(battle.enhanceLevel))}</span>
+              </li>
+              {battle.enhanceLevel > 0 && (
+                <li className="flex justify-between text-emerald-500">
+                  <span>능력치 강화 (+{battle.enhanceLevel})</span>
+                  <span>+{formatNumber(getEnhanceAttackBonus(battle.enhanceLevel))}</span>
+                </li>
+              )}
+              {equipBonuses.attackFlat > 0 && (
+                <li className="flex justify-between text-sky-500">
+                  <span>장비 공격력</span>
+                  <span>+{formatNumber(equipBonuses.attackFlat)}</span>
+                </li>
+              )}
+              {equipBonuses.attackPercent > 0 && (
+                <li className="flex justify-between text-sky-500">
+                  <span>장비 세트 효과</span>
+                  <span>+{equipBonuses.attackPercent}%</span>
+                </li>
+              )}
+              {traitBonuses.attackPercent > 0 && (
+                <li className="flex justify-between">
+                  <span>특성 공격력</span>
+                  <span>+{traitBonuses.attackPercent}%</span>
+                </li>
+              )}
+              {advancedClassBonuses.attackPercent > 0 && (
+                <li className="flex justify-between text-emerald-500">
+                  <span>전직 승급 효과</span>
+                  <span>+{advancedClassBonuses.attackPercent}%</span>
+                </li>
+              )}
+              {hasAdvantage && (
+                <li className="flex justify-between text-emerald-500">
+                  <span>속성 상성 우세</span>
+                  <span>
+                    +{Math.round(
+                      (elementAdvantageMultiplier +
+                        advancedClassBonuses.elementAdvantageBonus +
+                        uniqueEffectBonuses.elementAdvantageBonus -
+                        1) *
+                        100
+                    )}
+                    %
+                  </span>
+                </li>
+              )}
+              {battle.cheerBuffActive && (
+                <li className="flex justify-between text-pink-500">
+                  <span>응원 버프</span>
+                  <span>+{cheerBuffAttackPercent}%</span>
+                </li>
+              )}
+              {dexBonusPercent > 0 && (
+                <li className="flex justify-between">
+                  <span>몬스터 도감 보너스</span>
+                  <span>+{dexBonusPercent}%</span>
+                </li>
+              )}
+              {relicBonuses.allDamagePercent > 0 && (
+                <li className="flex justify-between">
+                  <span>영혼석 유물 (환생)</span>
+                  <span>+{relicBonuses.allDamagePercent}%</span>
+                </li>
+              )}
+              {petBonuses.attackPercent > 0 && (
+                <li className="flex justify-between">
+                  <span>동료 펫</span>
+                  <span>+{petBonuses.attackPercent}%</span>
+                </li>
+              )}
+              <li className="mt-2 flex justify-between border-t border-zinc-200 pt-2 text-xs text-zinc-400 dark:border-zinc-700">
+                <span>골드 획득</span>
+                <span>
+                  +
+                  {equipBonuses.goldFind +
+                    traitBonuses.goldFindPercent +
+                    (battle.guildBonuses?.treasuryGoldBonusPercent ?? 0) +
+                    advancedClassBonuses.goldFindPercent +
+                    petBonuses.goldFindPercent +
+                    uniqueEffectBonuses.goldFindPercent}
+                  %
+                </span>
+              </li>
+              <li className="flex justify-between text-xs text-zinc-400">
+                <span>경험치 획득</span>
+                <span>
+                  +
+                  {(battle.guildBonuses?.trainingExpBonusPercent ?? 0) +
+                    petBonuses.expPercent +
+                    uniqueEffectBonuses.expPercent}
+                  %
+                </span>
+              </li>
+              <li className="flex justify-between text-xs text-zinc-400">
+                <span>희귀 드롭 확률</span>
+                <span>+{traitBonuses.dropChancePercent + petBonuses.dropChancePercent}%</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      )}
+
       {eventMessage && (
         <div className="pointer-events-none fixed inset-x-4 bottom-20 z-40 mx-auto max-w-md rounded-lg bg-amber-100 px-4 py-2 text-center text-sm font-medium text-amber-700 shadow-lg dark:bg-amber-900/90 dark:text-amber-300">
           {eventMessage}
@@ -896,7 +1052,7 @@ export default function AdventurePage() {
           <div className="flex items-baseline justify-between">
             <span className="font-semibold text-zinc-950 dark:text-white">
               {battle.prestigeCount > 0 && (
-                <span className="mr-1 text-amber-500">{"⭐".repeat(Math.min(battle.prestigeCount, 5))}</span>
+                <span className="mr-1 text-amber-500">⭐×{battle.prestigeCount}</span>
               )}
               {character.progress?.equippedTitle && (
                 <span className="mr-1 text-xs font-normal text-amber-500">
@@ -904,24 +1060,14 @@ export default function AdventurePage() {
                 </span>
               )}
               {character.nickname} · Lv.{battle.level}
-              {battle.enhanceLevel > 0 && (
-                <span className="ml-1 text-xs font-normal text-emerald-500">
-                  (강화 +{battle.enhanceLevel})
-                </span>
-              )}
             </span>
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              공격력 {formatNumber(attack)}
-              {battle.enhanceLevel > 0 && (
-                <span className="text-emerald-500">
-                  {" "}
-                  (강화 +{formatNumber(getEnhanceAttackBonus(battle.enhanceLevel))})
-                </span>
-              )}
-              {equipBonuses.attackFlat > 0 && (
-                <span className="text-sky-500"> (장비 +{formatNumber(equipBonuses.attackFlat)})</span>
-              )}
-            </span>
+            <button
+              type="button"
+              onClick={() => setShowBuffPanel(true)}
+              className="flex items-center gap-1 rounded-full bg-zinc-200 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+            >
+              공격력 {formatNumber(attack)} · Buff
+            </button>
           </div>
           <ProgressBar value={battle.exp} max={expToNext} colorClassName="bg-sky-500" />
         </div>
@@ -965,6 +1111,26 @@ export default function AdventurePage() {
         unlockedIndex={battle.unlockedRegionIndex}
         onSelect={handleSelectRegion}
       />
+
+      <div className="flex items-center gap-2 rounded-lg bg-zinc-100 px-3 py-2 text-xs dark:bg-zinc-900">
+        <span className="text-zinc-500 dark:text-zinc-400">난이도</span>
+        <div className="flex flex-1 gap-1.5">
+          {regionDifficultyTiers.map((tier) => (
+            <button
+              key={tier.id}
+              type="button"
+              onClick={() => handleSelectDifficulty(tier.id)}
+              className={`flex-1 rounded-md py-1 font-medium transition ${
+                battle.difficultyTier === tier.id
+                  ? "bg-rose-500 text-white"
+                  : "bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+              }`}
+            >
+              {tier.label} {tier.multiplier > 1 ? `×${tier.multiplier}` : ""}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* 모험 장면: 하늘/땅이 있는 2D 무대 위에서 캐릭터와 몬스터가 마주본다 */}
       <div
