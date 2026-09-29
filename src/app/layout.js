@@ -16,6 +16,23 @@ const geistMono = Geist_Mono({
 export const metadata = {
   title: "모험가 길드",
   description: "협동 방치형 판타지 RPG",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "모험가 길드",
+  },
+  icons: {
+    apple: "/apple-icon.png",
+  },
+};
+
+// 휴대폰 화면 배율/확대 방지 + 상태바 색을 앱과 맞춰서, 홈 화면에 추가했을 때 진짜 앱처럼 보이게 한다.
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: "#4c1d95",
 };
 
 export default function RootLayout({ children }) {
